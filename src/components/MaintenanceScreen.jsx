@@ -24,7 +24,7 @@ export default function MaintenanceScreen({ vehicles, fuelLogs, serviceLogs, mai
     <>
 
       <div className="statgrid">
-        <div className="stat"><div className="sv">{fmt.num(odo)}</div><div className="sl">Current Odo</div></div>
+        <OdoStat vehicle={vehicle} odo={odo} refresh={refresh} showToast={showToast} />
         <div className="stat">
           <div className="sv" style={{ color: counts.overdue ? 'var(--red)' : 'var(--green)' }}>
             {counts.overdue}
@@ -63,6 +63,58 @@ export default function MaintenanceScreen({ vehicles, fuelLogs, serviceLogs, mai
         </div>
       ))}
     </>
+  )
+}
+
+// Tap-to-edit current mileage. The odometer is always DERIVED (max of
+// base_odometer, fuel logs, service logs) — this writes the base_odometer
+// anchor, which matters for vehicles with no logged history yet (their
+// derived odo is 0 and every mileage feature is blind until anchored).
+function OdoStat({ vehicle, odo, refresh, showToast }) {
+  const [editing, setEditing] = useState(false)
+  const [val, setVal] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const save = async () => {
+    const n = parseInt(val)
+    if (!n || n < 0) { showToast('ENTER A MILEAGE'); return }
+    setBusy(true)
+    const { error } = await supabase.from('vehicles')
+      .update({ base_odometer: n }).eq('id', vehicle.id)
+    setBusy(false)
+    if (error) { showToast('ERROR: ' + error.message); return }
+    setEditing(false); setVal('')
+    showToast(n < odo
+      ? `SAVED — logs already show ${odo.toLocaleString()} mi, which wins`
+      : 'MILEAGE UPDATED')
+    await refresh()
+  }
+
+  if (!editing) return (
+    <button className="stat" onClick={() => { setVal(odo ? String(odo) : ''); setEditing(true) }}
+      style={{ cursor: 'pointer', textAlign: 'left', font: 'inherit', color: 'inherit' }}
+      aria-label="Update current mileage">
+      <div className="sv">{fmt.num(odo)}</div>
+      <div className="sl">Current Odo · <span style={{ color: 'var(--amber)' }}>tap to set</span></div>
+    </button>
+  )
+  return (
+    <div className="stat">
+      <input type="number" inputMode="numeric" autoFocus value={val}
+        onChange={e => setVal(e.target.value)}
+        onKeyDown={e => e.key === 'Enter' && save()}
+        placeholder={vehicle.name + ' mileage'}
+        style={{ width: '100%', fontSize: 16, fontFamily: 'var(--font-mono)',
+          background: 'transparent', border: '1px solid var(--line-bright)',
+          borderRadius: 4, color: 'var(--text)', padding: '6px 8px' }} />
+      <div style={{ display: 'flex', gap: 6, marginTop: 7 }}>
+        <button className="btn-sm" onClick={save} disabled={busy}
+          style={{ flex: 1, color: 'var(--amber)', borderColor: 'rgba(255,176,0,0.4)' }}>
+          {busy ? '…' : 'SET'}
+        </button>
+        <button className="btn-sm" onClick={() => setEditing(false)} style={{ flex: 1 }}>CANCEL</button>
+      </div>
+    </div>
   )
 }
 
@@ -203,9 +255,14 @@ function MaintForm({ item, vehicle, vehicleId, ownerId, currentOdo, onDone }) {
           <input type="date" value={f.last_done_date} onChange={e => set('last_done_date', e.target.value)} />
         </div>
       </div>
-      <button className="btn-sm" onClick={markDoneNow} style={{ marginBottom: 12 }}>
-        MARK DONE TODAY @ {currentOdo.toLocaleString()} MI
+      <button className="btn-sm" onClick={markDoneNow} style={{ marginBottom: 4 }}>
+        {currentOdo > 0 ? `MARK DONE TODAY @ ${currentOdo.toLocaleString()} MI` : 'MARK DONE TODAY'}
       </button>
+      <div className="note" style={{ marginBottom: 12 }}>
+        {currentOdo > 0
+          ? 'Fills the fields above — edit the mileage there if the odometer estimate is off, then SAVE.'
+          : 'No odometer on record for this vehicle — type the actual mileage into "Last Done (miles)" above, or set Current Odo at the top of this screen first.'}
+      </div>
       <div className="field">
         <label>Part Number</label>
         <input value={f.part_number} onChange={e => set('part_number', e.target.value)} />
