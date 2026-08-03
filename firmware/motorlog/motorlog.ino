@@ -13,7 +13,7 @@
  */
 #include <FreematicsPlus.h>
 #include <WiFi.h>
-#include <HTTPClient.h>
+#include "http_transport.h"
 #include "secrets.h"
 
 #define SAMPLE_INTERVAL_MS 1000
@@ -131,27 +131,15 @@ String buildBatch() {
 
 void postBatch() {
   if (!bufCount || WiFi.status() != WL_CONNECTED) return;
-  HTTPClient http;
-  http.begin(INGEST_URL);
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("apikey", SUPABASE_ANON);
-  http.addHeader("x-device-key", DEVICE_KEY);
-  http.setTimeout(8000);
-  int code = http.POST(buildBatch());
+  int code = mlPost(INGEST_URL, SUPABASE_ANON, DEVICE_KEY, buildBatch());
   Serial.printf("[POST] %d samples -> HTTP %d\n", bufCount, code);
   if (code == 200) bufCount = 0;            // acked: clear; else retry next cycle
-  http.end();
 }
 
 void pullConfig() {
   if (WiFi.status() != WL_CONNECTED) return;
-  HTTPClient http;
-  http.begin(INGEST_URL);
-  http.addHeader("apikey", SUPABASE_ANON);
-  http.addHeader("x-device-key", DEVICE_KEY);
-  http.setTimeout(8000);
-  if (http.GET() == 200) {
-    String body = http.getString();
+  String body;
+  if (mlGet(INGEST_URL, SUPABASE_ANON, DEVICE_KEY, body) == 200) {
     int i = body.indexOf("\"report_interval_s\":");
     if (i >= 0) {
       int v = body.substring(i + 20).toInt();
@@ -161,7 +149,6 @@ void pullConfig() {
       }
     }
   }
-  http.end();
 }
 
 void setup() {
