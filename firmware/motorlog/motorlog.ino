@@ -1,15 +1,12 @@
 /**
- * MotorLog firmware for Freematics ONE+ (Model B)
- * ------------------------------------------------
- * Minimal, readable telematics node built on the FreematicsPlus library:
- *   - OBD-II polling (RPM, speed, coolant, fuel level, battery voltage)
- *   - GNSS positioning
- *   - Store-and-forward RAM buffer
- *   - Batched JSON HTTPS POST to the MotorLog ingest-telemetry edge function
- *   - App-managed config pull (reporting interval; WiFi applies next flash)
- *
- * WiFi transport first (home/driveway); the SIM7670G cellular path is a
- * follow-up once a SIM is installed. Secrets live in secrets.h (git-ignored).
+ * MotorLog firmware for Freematics ONE+ (Model B) — ml-0.2
+ * ---------------------------------------------------------
+ * Changes from ml-0.1 (first-drive shakedown findings):
+ *   - FIX: obd.begin(sys.link) was never called — OBD had no transport
+ *   - FIX: WiFi reconnect after long absence (disconnect before re-begin)
+ *   - Buffer grown 60 → 900 samples (~15 min) with chunked drain (≤450/POST)
+ *   - Motion gating: only record when moving or engine-on; idle = heartbeat
+ *   - OBD retry on a timestamp, not a modulo burst
  */
 #include <FreematicsPlus.h>
 #include <WiFi.h>
@@ -18,9 +15,11 @@
 
 #define SAMPLE_INTERVAL_MS 1000
 #define CONFIG_PULL_MS (60 * 60 * 1000UL)
-#define MAX_BATCH 60          // ~1 min of samples at 1 Hz
-#define FW_VERSION "ml-0.1"
-#define HEARTBEAT_MS (10 * 60 * 1000UL)   // idle liveness ping (keeps last_seen fresh)
+#define HEARTBEAT_MS (10 * 60 * 1000UL)
+#define OBD_RETRY_MS 20000
+#define MAX_BUF 900               // ~15 min at 1 Hz
+#define MAX_POST 450              // ingest fn caps batches at 500
+#define FW_VERSION "ml-0.2"
 
 FreematicsESP32 sys;
 COBD obd;
@@ -28,7 +27,7 @@ bool obdReady = false;
 bool gpsReady = false;
 
 struct Sample {
-  uint32_t epoch;             // seconds; 0 = unknown time (dropped)
+  uint32_t epoch;
   float lat, lng, speedKph;
   int16_t heading;
   float hdop;
@@ -36,44 +35,45 @@ struct Sample {
   float battV;
   bool haveGps, haveObd;
 };
-Sample buf[MAX_BATCH];
+Sample buf[MAX_BUF];
 int bufCount = 0;
 uint32_t reportIntervalMs = 30000;
-uint32_t lastPost = 0, lastConfig = 0, lastSample = 0;
-uint32_t lastHeartbeat = 0;
-uint32_t epochBase = 0, epochBaseMs = 0;   // set from GNSS time
+uint32_t lastPost = 0, lastConfig = 0, lastSample = 0, lastHeartbeat = 0, lastObdRetry = 0;
+uint32_t epochBase = 0, epochBaseMs = 0;
 
 void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) return;
-  Serial.print("[WIFI] connecting to " WIFI_SSID " ");
+  // a long time out of range can wedge the STA state — reset it first
+  WiFi.disconnect(true);
+  delay(100);
+  Serial.print("[WIFI] connecting ");
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  for (int i = 0; i < 30 && WiFi.status() != WL_CONNECTED; i++) {
+  for (int i = 0; i < 20 && WiFi.status() != WL_CONNECTED; i++) {
     delay(500); Serial.print('.');
   }
   Serial.println(WiFi.status() == WL_CONNECTED ? " OK" : " FAILED");
 }
 
-// GNSS provides UTC; convert its ts to a wall-clock epoch base
 void syncTimeFromGps(GPS_DATA* gd) {
   if (!gd || !gd->date) return;
-  // date: DDMMYY, time: HHMMSSmm (per Freematics GPS parsing)
   uint32_t d = gd->date, t = gd->time;
   int day = d / 10000, mon = (d / 100) % 100, yr = 2000 + d % 100;
   int hh = t / 1000000, mi = (t / 10000) % 100, ss = (t / 100) % 100;
   struct tm tmv = {};
   tmv.tm_year = yr - 1900; tmv.tm_mon = mon - 1; tmv.tm_mday = day;
   tmv.tm_hour = hh; tmv.tm_min = mi; tmv.tm_sec = ss;
-  time_t e = mktime(&tmv);   // device TZ is UTC (no TZ set)
+  time_t e = mktime(&tmv);
   if (e > 1700000000) { epochBase = (uint32_t)e; epochBaseMs = millis(); }
 }
 
 uint32_t nowEpoch() {
   if (epochBase) return epochBase + (millis() - epochBaseMs) / 1000;
-  time_t e = time(nullptr);                 // NTP epoch if WiFi got it
+  time_t e = time(nullptr);
   return e > 1700000000 ? (uint32_t)e : 0;
 }
 
 void takeSample() {
+  if (bufCount >= MAX_BUF) return;          // full: oldest data wins until drained
   Sample& s = buf[bufCount];
   s = {};
   s.epoch = nowEpoch();
@@ -84,30 +84,33 @@ void takeSample() {
     if (!s.epoch) s.epoch = nowEpoch();
     s.haveGps = true;
     s.lat = gd->lat; s.lng = gd->lng;
-    s.speedKph = gd->speed * 1.852f;        // knots → km/h
+    s.speedKph = gd->speed * 1.852f;
     s.heading = gd->heading;
     s.hdop = gd->hdop / 10.0f;
   }
 
   if (obdReady) {
     int v;
-    s.haveObd = true;
-    s.rpm      = obd.readPID(PID_RPM, v) ? v : -1;
-    s.speedObd = obd.readPID(PID_SPEED, v) ? v : -1;
-    s.coolant  = obd.readPID(PID_COOLANT_TEMP, v) ? v : -1;
-    s.fuelPct  = obd.readPID(PID_FUEL_LEVEL, v) ? v : -1;
-    s.battV    = obd.getVoltage();
+    if (obd.readPID(PID_RPM, v)) { s.haveObd = true; s.rpm = v; } else { s.rpm = -1; obdReady = false; }
+    if (s.haveObd) {
+      s.speedObd = obd.readPID(PID_SPEED, v) ? v : -1;
+      s.coolant  = obd.readPID(PID_COOLANT_TEMP, v) ? v : -100;
+      s.fuelPct  = obd.readPID(PID_FUEL_LEVEL, v) ? v : -1;
+      s.battV    = obd.getVoltage();
+    }
   }
 
-  if (s.epoch && (s.haveGps || s.haveObd)) {
-    if (bufCount < MAX_BATCH - 1) bufCount++;
-    // buffer full: newest sample keeps overwriting the last slot
-  }
+  // motion gating: record only when something is happening — moving, or the
+  // engine is turning. A parked truck with a GPS fix stays quiet (heartbeat
+  // covers liveness) instead of logging 86k idle rows a day.
+  bool moving = s.haveGps && s.speedKph > 3.0f;
+  bool engine = s.haveObd && s.rpm > 0;
+  if (s.epoch && (moving || engine)) bufCount++;
 }
 
-String buildBatch() {
+String buildBatch(int count) {
   String out = "{\"fw_version\":\"" FW_VERSION "\",\"batch\":[";
-  for (int i = 0; i < bufCount; i++) {
+  for (int i = 0; i < count; i++) {
     Sample& s = buf[i];
     if (i) out += ',';
     out += "{\"ts\":" + String(s.epoch);
@@ -131,15 +134,23 @@ String buildBatch() {
   return out;
 }
 
-void postBatch() {
+void drainBuffer() {
+  // up to two chunks per cycle: a full buffer clears in one go
+  for (int pass = 0; pass < 2 && bufCount > 0; pass++) {
+    int n = bufCount < MAX_POST ? bufCount : MAX_POST;
+    int code = mlPost(INGEST_URL, SUPABASE_ANON, DEVICE_KEY, buildBatch(n));
+    Serial.printf("[POST] %d/%d samples -> HTTP %d\n", n, bufCount, code);
+    if (code != 200) return;                 // keep everything, retry next cycle
+    if (bufCount > n) memmove(buf, buf + n, (bufCount - n) * sizeof(Sample));
+    bufCount -= n;
+    lastHeartbeat = millis();
+  }
+}
+
+void postCycle() {
   if (WiFi.status() != WL_CONNECTED) return;
-  if (bufCount) {
-    int code = mlPost(INGEST_URL, SUPABASE_ANON, DEVICE_KEY, buildBatch());
-    Serial.printf("[POST] %d samples -> HTTP %d\n", bufCount, code);
-    if (code == 200) { bufCount = 0; lastHeartbeat = millis(); }
-  } else if (millis() - lastHeartbeat >= HEARTBEAT_MS || lastHeartbeat == 0) {
-    // idle (parked / bench): a bare-timestamp ping keeps the device's
-    // online indicator honest without polluting telemetry with empty rows
+  if (bufCount) { drainBuffer(); return; }
+  if (millis() - lastHeartbeat >= HEARTBEAT_MS || lastHeartbeat == 0) {
     uint32_t e = nowEpoch();
     if (!e) return;
     String hb = "{\"fw_version\":\"" FW_VERSION "\",\"batch\":[{\"ts\":" + String(e) + "}]}";
@@ -164,19 +175,26 @@ void pullConfig() {
   }
 }
 
+void tryObd() {
+  obd.begin(sys.link);                       // the ml-0.1 bug: this was missing
+  obdReady = obd.init(PROTO_AUTO, true);
+  if (obdReady) Serial.println("[OBD] connected");
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.println("\n[MOTORLOG] " FW_VERSION " starting");
-  sys.begin(true, false);                    // co-proc on, cellular off (WiFi phase)
+  sys.begin(true, false);
 
+  obd.begin(sys.link);
   obdReady = obd.init();
-  Serial.println(obdReady ? "[OBD] connected" : "[OBD] not connected (bench mode)");
+  Serial.println(obdReady ? "[OBD] connected" : "[OBD] not connected (will retry)");
 
   gpsReady = sys.gpsBegin();
   Serial.println(gpsReady ? "[GNSS] on" : "[GNSS] unavailable");
 
   connectWiFi();
-  configTime(0, 0, "pool.ntp.org");          // NTP fallback clock (UTC)
+  configTime(0, 0, "pool.ntp.org");
   pullConfig();
   lastConfig = millis();
 }
@@ -190,15 +208,15 @@ void loop() {
   if (now - lastPost >= reportIntervalMs) {
     lastPost = now;
     connectWiFi();
-    postBatch();
+    postCycle();
   }
   if (now - lastConfig >= CONFIG_PULL_MS) {
     lastConfig = now;
     pullConfig();
   }
-  if (!obdReady && (now / 1000) % 30 == 0) { // retry OBD every ~30s (car started)
-    obdReady = obd.init(PROTO_AUTO, true);
-    if (obdReady) Serial.println("[OBD] connected");
+  if (!obdReady && now - lastObdRetry >= OBD_RETRY_MS) {
+    lastObdRetry = now;
+    tryObd();
   }
   delay(20);
 }
