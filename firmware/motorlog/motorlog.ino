@@ -20,6 +20,7 @@
 #define CONFIG_PULL_MS (60 * 60 * 1000UL)
 #define MAX_BATCH 60          // ~1 min of samples at 1 Hz
 #define FW_VERSION "ml-0.1"
+#define HEARTBEAT_MS (10 * 60 * 1000UL)   // idle liveness ping (keeps last_seen fresh)
 
 FreematicsESP32 sys;
 COBD obd;
@@ -39,6 +40,7 @@ Sample buf[MAX_BATCH];
 int bufCount = 0;
 uint32_t reportIntervalMs = 30000;
 uint32_t lastPost = 0, lastConfig = 0, lastSample = 0;
+uint32_t lastHeartbeat = 0;
 uint32_t epochBase = 0, epochBaseMs = 0;   // set from GNSS time
 
 void connectWiFi() {
@@ -130,10 +132,21 @@ String buildBatch() {
 }
 
 void postBatch() {
-  if (!bufCount || WiFi.status() != WL_CONNECTED) return;
-  int code = mlPost(INGEST_URL, SUPABASE_ANON, DEVICE_KEY, buildBatch());
-  Serial.printf("[POST] %d samples -> HTTP %d\n", bufCount, code);
-  if (code == 200) bufCount = 0;            // acked: clear; else retry next cycle
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (bufCount) {
+    int code = mlPost(INGEST_URL, SUPABASE_ANON, DEVICE_KEY, buildBatch());
+    Serial.printf("[POST] %d samples -> HTTP %d\n", bufCount, code);
+    if (code == 200) { bufCount = 0; lastHeartbeat = millis(); }
+  } else if (millis() - lastHeartbeat >= HEARTBEAT_MS || lastHeartbeat == 0) {
+    // idle (parked / bench): a bare-timestamp ping keeps the device's
+    // online indicator honest without polluting telemetry with empty rows
+    uint32_t e = nowEpoch();
+    if (!e) return;
+    String hb = "{\"fw_version\":\"" FW_VERSION "\",\"batch\":[{\"ts\":" + String(e) + "}]}";
+    int code = mlPost(INGEST_URL, SUPABASE_ANON, DEVICE_KEY, hb);
+    Serial.printf("[HEARTBEAT] HTTP %d\n", code);
+    if (code == 200) lastHeartbeat = millis();
+  }
 }
 
 void pullConfig() {
