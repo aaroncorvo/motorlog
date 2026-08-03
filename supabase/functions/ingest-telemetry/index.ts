@@ -60,6 +60,20 @@ Deno.serve(async (req) => {
     if (!devices.length) return json({ error: "unknown device" }, 403);
     const dev = devices[0];
 
+    // GET = config pull: the device fetches its app-managed configuration
+    // (WiFi, reporting interval, ...) on every check-in and applies changes.
+    if (req.method === "GET") {
+      const cfgRes = await fetch(
+        `${url}/rest/v1/device_config?device_id=eq.${dev.id}&select=config,updated_at&limit=1`,
+        { headers: H },
+      );
+      const cfgs = cfgRes.ok ? await cfgRes.json() : [];
+      return json({
+        config: cfgs[0]?.config ?? {},
+        updated_at: cfgs[0]?.updated_at ?? null,
+      });
+    }
+
     const body = await req.json();
     const batch: unknown[] = Array.isArray(body?.batch) ? body.batch : [];
     if (!batch.length) return json({ error: "batch[] required" }, 400);

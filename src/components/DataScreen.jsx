@@ -33,6 +33,135 @@ function FeedbackCard({ me, plan, showToast }) {
   )
 }
 
+// Telematics devices (Freematics ONE+ etc.): fleet-visible status; owner-only
+// config editor. The device PULLS config on its next check-in — changes here
+// take effect without touching the hardware.
+function DevicesCard({ vehicles, me, showToast }) {
+  const [devices, setDevices] = useState(null)   // null = table missing (migration 0015)
+  const [configs, setConfigs] = useState({})     // device_id → config (owner only)
+  const [editing, setEditing] = useState(null)   // device_id being edited
+  const [form, setForm] = useState({})
+  const [busy, setBusy] = useState(false)
+
+  const load = async () => {
+    const { data, error } = await supabase.from('devices').select('*').order('created_at')
+    if (error) { setDevices(null); return }
+    setDevices(data)
+    const { data: cfg } = await supabase.from('device_config').select('*')
+    if (cfg) setConfigs(Object.fromEntries(cfg.map(c => [c.device_id, c.config])))
+  }
+  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (devices === null) return null            // telematics not set up — hide entirely
+  if (devices.length === 0) return (
+    <>
+      <div className="section-label">Devices</div>
+      <div className="card"><div className="note">
+        No telematics devices registered yet. Devices are provisioned once over USB,
+        then managed here.
+      </div></div>
+    </>
+  )
+
+  const startEdit = (d) => {
+    const c = configs[d.id] || {}
+    setForm({
+      wifi_ssid: c.wifi_ssid || '',
+      wifi_password: c.wifi_password || '',
+      report_interval_s: c.report_interval_s || 30,
+    })
+    setEditing(d.id)
+  }
+
+  const saveConfig = async (d) => {
+    setBusy(true)
+    const config = {
+      ...(configs[d.id] || {}),
+      wifi_ssid: form.wifi_ssid.trim(),
+      wifi_password: form.wifi_password,
+      report_interval_s: Math.max(5, parseInt(form.report_interval_s) || 30),
+    }
+    const { error } = await supabase.from('device_config')
+      .upsert({ device_id: d.id, config, updated_at: new Date().toISOString() })
+    setBusy(false)
+    if (error) {
+      showToast(/relation|schema/.test(error.message)
+        ? 'CONFIG NEEDS MIGRATION 0016' : 'ERROR: ' + error.message)
+      return
+    }
+    setConfigs(p => ({ ...p, [d.id]: config }))
+    setEditing(null)
+    showToast('SAVED — DEVICE APPLIES IT AT NEXT CHECK-IN')
+  }
+
+  const fresh = (iso) => iso && (Date.now() - new Date(iso).getTime()) < 5 * 60 * 1000
+
+  return (
+    <>
+    <div className="section-label">Devices</div>
+    <div className="card">
+      {devices.map(d => {
+        const v = vehicles.find(x => x.id === d.vehicle_id)
+        const isOwner = d.user_id === me?.id
+        return (
+          <div key={d.id} style={{ borderTop: '1px solid var(--line)', paddingTop: 10, marginTop: 10 }}>
+            <div className="logrow" style={{ borderBottom: 'none', padding: 0 }}>
+              <div className="lmain">
+                <div className="lt" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ color: fresh(d.last_seen_at) ? 'var(--green)' : 'var(--text-faint)' }}>●</span>
+                  {d.name}
+                </div>
+                <div className="ls" style={{ fontFamily: 'var(--font-mono)' }}>
+                  {d.hardware_id}{v ? ` · ${v.nickname || v.name}` : ''}
+                  {d.fw_version ? ` · fw ${d.fw_version}` : ''}
+                  {d.last_seen_at
+                    ? ` · seen ${new Date(d.last_seen_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+                    : ' · never checked in'}
+                </div>
+              </div>
+              {isOwner && editing !== d.id && (
+                <button className="btn-sm" onClick={() => startEdit(d)}>CONFIG</button>
+              )}
+            </div>
+            {editing === d.id && (
+              <div style={{ marginTop: 10 }}>
+                <div className="frow">
+                  <div className="field">
+                    <label>WiFi SSID</label>
+                    <input value={form.wifi_ssid} autoComplete="off"
+                      onChange={e => setForm(p => ({ ...p, wifi_ssid: e.target.value }))} />
+                  </div>
+                  <div className="field">
+                    <label>WiFi Password</label>
+                    <input type="password" value={form.wifi_password} autoComplete="new-password"
+                      onChange={e => setForm(p => ({ ...p, wifi_password: e.target.value }))} />
+                  </div>
+                </div>
+                <div className="field">
+                  <label>Report interval (seconds, while driving)</label>
+                  <input type="number" inputMode="numeric" value={form.report_interval_s}
+                    onChange={e => setForm(p => ({ ...p, report_interval_s: e.target.value }))} />
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn2" style={{ flex: 1 }} disabled={busy} onClick={() => saveConfig(d)}>
+                    {busy ? 'SAVING…' : 'SAVE CONFIG'}
+                  </button>
+                  <button className="btn2" style={{ flex: 1 }} onClick={() => setEditing(null)}>CANCEL</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      })}
+      <div className="note" style={{ marginTop: 10 }}>
+        Config is pulled by the device at its next check-in — no cable needed after
+        first provisioning. WiFi credentials are visible only to the fleet owner.
+      </div>
+    </div>
+    </>
+  )
+}
+
 // Per-user webhook push channels (ntfy / Discord / generic). Unlike fleet data these are
 // personal — each family member adds their own on their own device (RLS: user_id = auth.uid()).
 function NotificationChannels({ me, showToast }) {
@@ -503,6 +632,8 @@ export default function DataScreen({ vehicles, fuelLogs, serviceLogs, maintItems
           )
         })()}
       </div>
+
+      <DevicesCard vehicles={vehicles} me={me} showToast={showToast} />
 
       <div className="section-label">Google Drive Backup</div>
       <div className="card">
