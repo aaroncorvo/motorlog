@@ -44,8 +44,16 @@ Deno.serve(async (req) => {
       headers: { ...CORS, "Content-Type": "application/json" },
     });
   try {
-    const key = req.headers.get("x-device-key");
-    if (!key) return json({ error: "x-device-key required" }, 401);
+    // Key arrives in the x-device-key header (WiFi transport) or in the JSON
+    // body as device_key (cellular — the SIMCOM HTTP stack can't add custom
+    // headers). Body is parsed once here and reused below.
+    let body: Record<string, unknown> = {};
+    if (req.method !== "GET") {
+      try { body = await req.json(); } catch { /* handled by validators below */ }
+    }
+    const key = req.headers.get("x-device-key") ??
+      (typeof body.device_key === "string" ? body.device_key : null);
+    if (!key) return json({ error: "device key required" }, 401);
 
     const url = Deno.env.get("SUPABASE_URL")!;
     const svc = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -60,9 +68,8 @@ Deno.serve(async (req) => {
     if (!devices.length) return json({ error: "unknown device" }, 403);
     const dev = devices[0];
 
-    // GET = config pull: the device fetches its app-managed configuration
-    // (WiFi, reporting interval, ...) on every check-in and applies changes.
-    if (req.method === "GET") {
+    // Config pull: GET (WiFi) or POST {action:'config'} (cellular).
+    if (req.method === "GET" || body.action === "config") {
       const cfgRes = await fetch(
         `${url}/rest/v1/device_config?device_id=eq.${dev.id}&select=config,updated_at&limit=1`,
         { headers: H },
@@ -74,7 +81,6 @@ Deno.serve(async (req) => {
       });
     }
 
-    const body = await req.json();
     const batch: unknown[] = Array.isArray(body?.batch) ? body.batch : [];
     if (!batch.length) return json({ error: "batch[] required" }, 400);
     if (batch.length > 500) return json({ error: "batch too large (max 500)" }, 400);

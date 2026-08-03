@@ -1,15 +1,20 @@
 /**
- * MotorLog firmware for Freematics ONE+ (Model B) — ml-0.2
+ * MotorLog firmware for Freematics ONE+ (Model B) — ml-0.3
  * ---------------------------------------------------------
- * Changes from ml-0.1 (first-drive shakedown findings):
- *   - FIX: obd.begin(sys.link) was never called — OBD had no transport
- *   - FIX: WiFi reconnect after long absence (disconnect before re-begin)
- *   - Buffer grown 60 → 900 samples (~15 min) with chunked drain (≤450/POST)
- *   - Motion gating: only record when moving or engine-on; idle = heartbeat
- *   - OBD retry on a timestamp, not a modulo burst
+ * New in ml-0.3:
+ *   - SD card spooling: full trips captured regardless of length; chunk files
+ *     (~240 samples each) deleted only after the server acks them
+ *   - Cellular uplink (SIM7670G, Hologram APN) as WiFi fallback — device key
+ *     travels in the JSON body over cell (SIMCOM HTTP can't add headers)
+ *   - Low-battery guard: cellular transmit pauses below 11.9 V resting
+ * Carries the ml-0.2 fixes: obd.begin(sys.link), WiFi STA reset on reconnect,
+ * motion gating, timestamped OBD retry.
  */
 #include <FreematicsPlus.h>
+#include <FreematicsNetwork.h>
 #include <WiFi.h>
+#include <SPI.h>
+#include <SD.h>
 #include "http_transport.h"
 #include "secrets.h"
 
@@ -17,14 +22,18 @@
 #define CONFIG_PULL_MS (60 * 60 * 1000UL)
 #define HEARTBEAT_MS (10 * 60 * 1000UL)
 #define OBD_RETRY_MS 20000
-#define MAX_BUF 900               // ~15 min at 1 Hz
-#define MAX_POST 450              // ingest fn caps batches at 500
-#define FW_VERSION "ml-0.2"
+#define CELL_RETRY_MS (5 * 60 * 1000UL)
+#define MAX_CHUNK 240             // samples per spool file (~36KB batch string)
+#define RAM_BUF 900               // fallback when no SD card
+#define LOW_BATT_V 11.9f
+#define FW_VERSION "ml-0.3"
 
 FreematicsESP32 sys;
 COBD obd;
-bool obdReady = false;
-bool gpsReady = false;
+CellHTTP cell;
+bool obdReady = false, gpsReady = false, sdReady = false, cellReady = false;
+uint32_t lastCellTry = 0;
+float lastBattV = 0;
 
 struct Sample {
   uint32_t epoch;
@@ -35,25 +44,15 @@ struct Sample {
   float battV;
   bool haveGps, haveObd;
 };
-Sample buf[MAX_BUF];
-int bufCount = 0;
+Sample ramBuf[RAM_BUF];
+int ramCount = 0;
+int chunkLines = 0;               // lines in the active spool chunk
+uint32_t chunkSeq = 0;            // active chunk number
 uint32_t reportIntervalMs = 30000;
 uint32_t lastPost = 0, lastConfig = 0, lastSample = 0, lastHeartbeat = 0, lastObdRetry = 0;
 uint32_t epochBase = 0, epochBaseMs = 0;
 
-void connectWiFi() {
-  if (WiFi.status() == WL_CONNECTED) return;
-  // a long time out of range can wedge the STA state — reset it first
-  WiFi.disconnect(true);
-  delay(100);
-  Serial.print("[WIFI] connecting ");
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  for (int i = 0; i < 20 && WiFi.status() != WL_CONNECTED; i++) {
-    delay(500); Serial.print('.');
-  }
-  Serial.println(WiFi.status() == WL_CONNECTED ? " OK" : " FAILED");
-}
-
+// ---------- time ----------
 void syncTimeFromGps(GPS_DATA* gd) {
   if (!gd || !gd->date) return;
   uint32_t d = gd->date, t = gd->time;
@@ -72,10 +71,138 @@ uint32_t nowEpoch() {
   return e > 1700000000 ? (uint32_t)e : 0;
 }
 
+// ---------- serialization ----------
+String sampleJson(const Sample& s) {
+  String out = "{\"ts\":" + String(s.epoch);
+  if (s.haveGps) {
+    out += ",\"lat\":" + String(s.lat, 6) + ",\"lon\":" + String(s.lng, 6);
+    out += ",\"speed_kph\":" + String(s.speedKph, 1);
+    out += ",\"heading\":" + String(s.heading);
+    out += ",\"hdop\":" + String(s.hdop, 1);
+  }
+  if (s.haveObd) {
+    if (s.rpm >= 0) out += ",\"rpm\":" + String(s.rpm);
+    if (s.coolant > -40) out += ",\"coolant_c\":" + String(s.coolant);
+    if (s.fuelPct >= 0) out += ",\"fuel_pct\":" + String(s.fuelPct);
+    out += ",\"batt_v\":" + String(s.battV, 2);
+    out += ",\"engine_on\":";
+    out += (s.rpm > 0 ? "true" : "false");
+  }
+  out += '}';
+  return out;
+}
+
+// ---------- SD spool ----------
+String chunkPath(uint32_t seq) {
+  char p[24];
+  snprintf(p, sizeof(p), "/ml/%08u.jsn", seq);
+  return String(p);
+}
+
+void sdInit() {
+  SPI.begin();
+  sdReady = SD.begin(PIN_SD_CS, SPI, SPI_FREQ);
+  if (!sdReady) { Serial.println("[SD] none — RAM buffer fallback"); return; }
+  SD.mkdir("/ml");
+  // resume after the highest existing chunk
+  File dir = SD.open("/ml");
+  uint32_t maxSeq = 0;
+  for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+    uint32_t n = atol(f.name());
+    if (n > maxSeq) maxSeq = n;
+    f.close();
+  }
+  dir.close();
+  chunkSeq = maxSeq + 1;
+  Serial.printf("[SD] ready, %u MB free, spool resumes at #%u\n",
+    (unsigned)((SD.totalBytes() - SD.usedBytes()) >> 20), chunkSeq);
+}
+
+void spoolSample(const Sample& s) {
+  File f = SD.open(chunkPath(chunkSeq), FILE_APPEND);
+  if (!f) { sdReady = false; return; }       // card yanked: fall back to RAM
+  f.println(sampleJson(s));
+  f.close();
+  if (++chunkLines >= MAX_CHUNK) { chunkSeq++; chunkLines = 0; }
+}
+
+// oldest sealed chunk (or the active one if it has data and we're idle)
+bool oldestChunk(uint32_t& seq) {
+  File dir = SD.open("/ml");
+  if (!dir) return false;
+  uint32_t best = 0xFFFFFFFF;
+  for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+    uint32_t n = atol(f.name());
+    if (n && n < best) best = n;
+    f.close();
+  }
+  dir.close();
+  if (best == 0xFFFFFFFF) return false;
+  seq = best;
+  return true;
+}
+
+String loadChunkBatch(uint32_t seq) {
+  File f = SD.open(chunkPath(seq));
+  if (!f) return "";
+  String out = "{\"device_key\":\"" DEVICE_KEY "\",\"fw_version\":\"" FW_VERSION "\",\"batch\":[";
+  bool first = true;
+  while (f.available()) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (!line.length()) continue;
+    if (!first) out += ',';
+    out += line;
+    first = false;
+  }
+  f.close();
+  out += "]}";
+  return first ? "" : out;
+}
+
+// ---------- transports ----------
+bool wifiUp() { return WiFi.status() == WL_CONNECTED; }
+
+void connectWiFi() {
+  if (wifiUp()) return;
+  WiFi.disconnect(true);
+  delay(100);
+  Serial.print("[WIFI] connecting ");
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  for (int i = 0; i < 20 && !wifiUp(); i++) { delay(500); Serial.print('.'); }
+  Serial.println(wifiUp() ? " OK" : " FAILED");
+}
+
+void tryCell() {
+  if (cellReady || millis() - lastCellTry < CELL_RETRY_MS) return;
+  lastCellTry = millis();
+  Serial.print("[CELL] init… ");
+  if (!cell.begin(&sys)) { Serial.println("no modem"); return; }
+  if (!cell.setup(CELL_APN)) { Serial.println("no network (SIM? signal?)"); return; }
+  cellReady = true;
+  Serial.println("registered on LTE");
+}
+
+// POST a prebuilt body via best transport; returns HTTP status (0 = no transport)
+int postBody(const String& body) {
+  if (wifiUp()) return mlPost(INGEST_URL, SUPABASE_ANON, DEVICE_KEY, body);
+  if (lastBattV > 0 && lastBattV < LOW_BATT_V) {
+    Serial.println("[CELL] skipped — battery low");
+    return 0;
+  }
+  tryCell();
+  if (!cellReady) return 0;
+  if (!cell.open(INGEST_HOST, 443)) { cellReady = false; return 0; }
+  if (!cell.send(METHOD_POST, INGEST_HOST, 443, INGEST_PATH, body.c_str(), body.length())) {
+    cellReady = false;
+    return 0;
+  }
+  return cell.code();
+}
+
+// ---------- sampling ----------
 void takeSample() {
-  if (bufCount >= MAX_BUF) return;          // full: oldest data wins until drained
-  Sample& s = buf[bufCount];
-  s = {};
+  Sample s = {};
   s.epoch = nowEpoch();
 
   GPS_DATA* gd = nullptr;
@@ -97,73 +224,76 @@ void takeSample() {
       s.coolant  = obd.readPID(PID_COOLANT_TEMP, v) ? v : -100;
       s.fuelPct  = obd.readPID(PID_FUEL_LEVEL, v) ? v : -1;
       s.battV    = obd.getVoltage();
+      lastBattV  = s.battV;
     }
   }
 
-  // motion gating: record only when something is happening — moving, or the
-  // engine is turning. A parked truck with a GPS fix stays quiet (heartbeat
-  // covers liveness) instead of logging 86k idle rows a day.
   bool moving = s.haveGps && s.speedKph > 3.0f;
   bool engine = s.haveObd && s.rpm > 0;
-  if (s.epoch && (moving || engine)) bufCount++;
+  if (!s.epoch || (!moving && !engine)) return;
+
+  if (sdReady) spoolSample(s);
+  else if (ramCount < RAM_BUF) ramBuf[ramCount++] = s;
 }
 
-String buildBatch(int count) {
-  String out = "{\"fw_version\":\"" FW_VERSION "\",\"batch\":[";
-  for (int i = 0; i < count; i++) {
-    Sample& s = buf[i];
+// ---------- upload ----------
+String ramBatch() {
+  String out = "{\"device_key\":\"" DEVICE_KEY "\",\"fw_version\":\"" FW_VERSION "\",\"batch\":[";
+  for (int i = 0; i < ramCount; i++) {
     if (i) out += ',';
-    out += "{\"ts\":" + String(s.epoch);
-    if (s.haveGps) {
-      out += ",\"lat\":" + String(s.lat, 6) + ",\"lon\":" + String(s.lng, 6);
-      out += ",\"speed_kph\":" + String(s.speedKph, 1);
-      out += ",\"heading\":" + String(s.heading);
-      out += ",\"hdop\":" + String(s.hdop, 1);
-    }
-    if (s.haveObd) {
-      if (s.rpm >= 0) out += ",\"rpm\":" + String(s.rpm);
-      if (s.coolant > -40) out += ",\"coolant_c\":" + String(s.coolant);
-      if (s.fuelPct >= 0) out += ",\"fuel_pct\":" + String(s.fuelPct);
-      out += ",\"batt_v\":" + String(s.battV, 2);
-      out += ",\"engine_on\":";
-      out += (s.rpm > 0 ? "true" : "false");
-    }
-    out += '}';
+    out += sampleJson(ramBuf[i]);
   }
   out += "]}";
   return out;
 }
 
-void drainBuffer() {
-  // up to two chunks per cycle: a full buffer clears in one go
-  for (int pass = 0; pass < 2 && bufCount > 0; pass++) {
-    int n = bufCount < MAX_POST ? bufCount : MAX_POST;
-    int code = mlPost(INGEST_URL, SUPABASE_ANON, DEVICE_KEY, buildBatch(n));
-    Serial.printf("[POST] %d/%d samples -> HTTP %d\n", n, bufCount, code);
-    if (code != 200) return;                 // keep everything, retry next cycle
-    if (bufCount > n) memmove(buf, buf + n, (bufCount - n) * sizeof(Sample));
-    bufCount -= n;
-    lastHeartbeat = millis();
+void drain() {
+  if (sdReady) {
+    // seal a partially-filled active chunk so it becomes drainable
+    if (chunkLines > 0) { chunkSeq++; chunkLines = 0; }
+    for (int pass = 0; pass < 3; pass++) {
+      uint32_t seq;
+      if (!oldestChunk(seq)) return;
+      String body = loadChunkBatch(seq);
+      if (!body.length()) { SD.remove(chunkPath(seq)); continue; }  // empty file
+      int code = postBody(body);
+      Serial.printf("[POST] chunk #%u -> HTTP %d\n", seq, code);
+      if (code != 200) return;               // keep chunk, retry next cycle
+      SD.remove(chunkPath(seq));
+      lastHeartbeat = millis();
+    }
+  } else if (ramCount) {
+    int code = postBody(ramBatch());
+    Serial.printf("[POST] %d samples (RAM) -> HTTP %d\n", ramCount, code);
+    if (code == 200) { ramCount = 0; lastHeartbeat = millis(); }
   }
 }
 
-void postCycle() {
-  if (WiFi.status() != WL_CONNECTED) return;
-  if (bufCount) { drainBuffer(); return; }
-  if (millis() - lastHeartbeat >= HEARTBEAT_MS || lastHeartbeat == 0) {
-    uint32_t e = nowEpoch();
-    if (!e) return;
-    String hb = "{\"fw_version\":\"" FW_VERSION "\",\"batch\":[{\"ts\":" + String(e) + "}]}";
-    int code = mlPost(INGEST_URL, SUPABASE_ANON, DEVICE_KEY, hb);
-    Serial.printf("[HEARTBEAT] HTTP %d\n", code);
-    if (code == 200) lastHeartbeat = millis();
-  }
+void heartbeat() {
+  if (millis() - lastHeartbeat < HEARTBEAT_MS && lastHeartbeat != 0) return;
+  uint32_t e = nowEpoch();
+  if (!e) return;
+  String hb = "{\"device_key\":\"" DEVICE_KEY "\",\"fw_version\":\"" FW_VERSION
+              "\",\"batch\":[{\"ts\":" + String(e) + "}]}";
+  int code = postBody(hb);
+  Serial.printf("[HEARTBEAT] HTTP %d\n", code);
+  if (code == 200) lastHeartbeat = millis();
 }
 
 void pullConfig() {
-  if (WiFi.status() != WL_CONNECTED) return;
   String body;
-  if (mlGet(INGEST_URL, SUPABASE_ANON, DEVICE_KEY, body) == 200) {
+  int code = 0;
+  if (wifiUp()) {
+    code = mlGet(INGEST_URL, SUPABASE_ANON, DEVICE_KEY, body);
+  } else {
+    // cellular config pull: POST {action:'config'}
+    String req = "{\"device_key\":\"" DEVICE_KEY "\",\"action\":\"config\"}";
+    code = postBody(req);
+    // body unavailable through CellHTTP's simple interface; interval changes
+    // apply on the next WiFi pull — acceptable for a rarely-changed knob
+    if (code == 200) return;
+  }
+  if (code == 200) {
     int i = body.indexOf("\"report_interval_s\":");
     if (i >= 0) {
       int v = body.substring(i + 20).toInt();
@@ -176,7 +306,7 @@ void pullConfig() {
 }
 
 void tryObd() {
-  obd.begin(sys.link);                       // the ml-0.1 bug: this was missing
+  obd.begin(sys.link);
   obdReady = obd.init(PROTO_AUTO, true);
   if (obdReady) Serial.println("[OBD] connected");
 }
@@ -184,7 +314,7 @@ void tryObd() {
 void setup() {
   Serial.begin(115200);
   Serial.println("\n[MOTORLOG] " FW_VERSION " starting");
-  sys.begin(true, false);
+  sys.begin(true, true);                     // co-proc + cellular power rail on
 
   obd.begin(sys.link);
   obdReady = obd.init();
@@ -193,8 +323,11 @@ void setup() {
   gpsReady = sys.gpsBegin();
   Serial.println(gpsReady ? "[GNSS] on" : "[GNSS] unavailable");
 
+  sdInit();
   connectWiFi();
   configTime(0, 0, "pool.ntp.org");
+  tryCell();      // register on LTE at boot even with WiFi up: idle-cheap, and
+                  // the modem is ready the moment the truck leaves WiFi range
   pullConfig();
   lastConfig = millis();
 }
@@ -207,8 +340,9 @@ void loop() {
   }
   if (now - lastPost >= reportIntervalMs) {
     lastPost = now;
-    connectWiFi();
-    postCycle();
+    if (!wifiUp()) connectWiFi();
+    drain();
+    heartbeat();
   }
   if (now - lastConfig >= CONFIG_PULL_MS) {
     lastConfig = now;
