@@ -1,14 +1,13 @@
 import { createClient } from '@supabase/supabase-js'
-import { makeAuthStorage } from './native.js'
 
 const url = import.meta.env.VITE_SUPABASE_URL
 const key = import.meta.env.VITE_SUPABASE_KEY
 
-// On native builds the session lives in OS-backed Preferences rather than
-// WKWebView localStorage, which iOS may evict (see lib/native.js).
-const storage = makeAuthStorage()
-
-export const supabase = (url && key)
-  ? createClient(url, key, storage ? { auth: { storage, persistSession: true, autoRefreshToken: true } } : undefined)
-  : null
+// Auth state lives in WebView localStorage on every platform — same as the
+// PWA has always done. A Preferences-backed adapter was tried for iOS but its
+// async dynamic import can wedge supabase-js's internal auth lock (getSession
+// holds it, signIn waits on it forever). If eviction-proof persistence is
+// wanted later, preload the plugin eagerly BEFORE createClient — never lazily
+// inside the storage callbacks.
+export const supabase = (url && key) ? createClient(url, key) : null
 export const configMissing = !supabase
