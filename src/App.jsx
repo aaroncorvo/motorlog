@@ -60,6 +60,15 @@ export default function App() {
     setTimeout(() => setToast(null), 2200)
   }, [])
 
+  // Native: dismiss the splash as soon as React mounts — otherwise it lingers
+  // on a fixed timeout ("automatically hidden" warning in the device logs)
+  useEffect(() => {
+    if (!isNative()) return
+    import('@capacitor/splash-screen')
+      .then(({ SplashScreen }) => SplashScreen.hide())
+      .catch(() => {})
+  }, [])
+
   useEffect(() => {
     if (configMissing) return
     // A failed or slow session read must still reveal the login screen — an
