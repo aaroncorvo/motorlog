@@ -11,3 +11,11 @@ dist
 
 # firmware secrets (baked at flash time, never committed)
 firmware/**/secrets.h
+
+# Capacitor native build artifacts (native projects themselves ARE committed)
+ios/App/build/
+ios/App/Pods/
+ios/App/App/public/
+android/app/build/
+android/build/
+android/.gradle/
