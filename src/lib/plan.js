@@ -9,7 +9,12 @@ export async function fetchPlan(ownerId) {
     supabase.from('plan_limits').select('*'),
   ])
   if (tierRes.error || limitsRes.error) return { ready: false }
-  return { ready: true, tier: tierRes.data, limits: limitsRes.data || [] }
+  const plan = { ready: true, tier: tierRes.data, limits: limitsRes.data || [] }
+  if (plan.tier === 'free' || plan.tier === 'expired') {
+    const { data: ends } = await supabase.rpc('trial_ends_at', { owner: ownerId })
+    if (ends) plan.trialEndsAt = ends
+  }
+  return plan
 }
 
 // Pure — tested. Turns plan + current counts into UI gating facts.

@@ -628,10 +628,16 @@ export default function DataScreen({ vehicles, fuelLogs, serviceLogs, maintItems
             <>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
                 <span style={{ fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700,
-                  textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--amber)' }}>
-                  {st.tier}
+                  textTransform: 'uppercase', letterSpacing: '0.08em',
+                  color: st.tier === 'expired' ? 'var(--red)' : 'var(--amber)' }}>
+                  {st.tier === 'free' ? 'Trial' : st.tier}
                 </span>
-                <span className="note" style={{ margin: 0 }}>current plan</span>
+                <span className="note" style={{ margin: 0 }}>
+                  {st.tier === 'free' && plan?.trialEndsAt
+                    ? `${Math.max(0, Math.ceil((new Date(plan.trialEndsAt) - Date.now()) / 86400000))} days left`
+                    : st.tier === 'expired' ? 'trial ended — your data is safe and readable'
+                    : 'current plan'}
+                </span>
               </div>
               <div className="gauges" style={{ marginTop: 12 }}>
                 <div className="gauge">
