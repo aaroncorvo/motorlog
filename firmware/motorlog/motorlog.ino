@@ -30,10 +30,84 @@
 
 FreematicsESP32 sys;
 COBD obd;
-CellHTTP cell;
-bool obdReady = false, gpsReady = false, sdReady = false, cellReady = false;
+
+// CellHTTP + network-clock access: LTE broadcasts time (AT+CCLK), which lets
+// the device timestamp samples with no GPS fix and no WiFi (garage cold-boot).
+class MLCell : public CellHTTP {
+public:
+  // Proper SIM7670 HTTPS POST: the library's branch fires AT+HTTPACTION and
+  // returns without waiting for (or parsing) the result. This one completes
+  // the handshake and returns the real HTTP status (0 = transport failure).
+  // SIM7670 HTTPS POST. The stock library fires AT+HTTPACTION without waiting
+  // for the result; this completes the handshake and returns the real status.
+  // sslVariant selects a TLS config permutation (see postCell) because SIM7670G
+  // firmware revisions disagree about which CSSLCFG form they accept.
+  int post7670(const char* url, const char* payload, int len, int sslVariant) {
+    sendCommand("AT+HTTPTERM\r", 1000);
+    if (!sendCommand("AT+HTTPINIT\r", 3000)) return 0;
+
+    switch (sslVariant) {
+      case 0:                                    // explicit TLS1.2 + SNI, no verify
+        sendCommand("AT+CSSLCFG=\"sslversion\",0,3\r", 1000);
+        sendCommand("AT+CSSLCFG=\"authmode\",0,0\r", 1000);
+        sendCommand("AT+CSSLCFG=\"enableSNI\",0,1\r", 1000);
+        sendCommand("AT+HTTPPARA=\"SSLCFG\",0\r", 1000);
+        break;
+      case 1:                                    // any TLS version + SNI
+        sendCommand("AT+CSSLCFG=\"sslversion\",0,4\r", 1000);
+        sendCommand("AT+CSSLCFG=\"authmode\",0,0\r", 1000);
+        sendCommand("AT+CSSLCFG=\"enableSNI\",0,1\r", 1000);
+        sendCommand("AT+HTTPPARA=\"SSLCFG\",0\r", 1000);
+        break;
+      case 2:                                    // ignore local time (RTC unset)
+        sendCommand("AT+CSSLCFG=\"sslversion\",0,3\r", 1000);
+        sendCommand("AT+CSSLCFG=\"authmode\",0,0\r", 1000);
+        sendCommand("AT+CSSLCFG=\"ignorelocaltime\",0,1\r", 1000);
+        sendCommand("AT+CSSLCFG=\"enableSNI\",0,1\r", 1000);
+        sendCommand("AT+HTTPPARA=\"SSLCFG\",0\r", 1000);
+        break;
+      default:                                   // modem defaults, no CSSLCFG
+        break;
+    }
+
+    char cmd[320];
+    snprintf(cmd, sizeof(cmd), "AT+HTTPPARA=\"URL\",\"%s\"\r", url);
+    int code = 0;
+    if (sendCommand(cmd, 2000)) {
+      sendCommand("AT+HTTPPARA=\"CONTENT\",\"application/json\"\r", 1000);
+      snprintf(cmd, sizeof(cmd), "AT+HTTPDATA=%d,10000\r", len);
+      if (sendCommand(cmd, 3000, "DOWNLOAD")) {
+        m_device->xbWrite(payload, len);
+        sendCommand(0, 5000, "OK");
+        if (sendCommand("AT+HTTPACTION=1\r", 2000) && sendCommand(0, 45000, "+HTTPACTION:")) {
+          char* p = strstr(m_buffer, "+HTTPACTION:");
+          if (p && (p = strchr(p, ','))) code = atoi(p + 1);
+        }
+      }
+    }
+    sendCommand("AT+HTTPTERM\r", 1000);
+    return code;
+  }
+
+  uint32_t networkEpoch() {
+    if (!sendCommand("AT+CCLK?\r", 3000, "+CCLK:")) return 0;
+    char* p = strstr(m_buffer, "+CCLK:");
+    if (!p || !(p = strchr(p, '"'))) return 0;
+    int yy, MM, dd, hh, mm, ss, tz = 0;
+    if (sscanf(p + 1, "%d/%d/%d,%d:%d:%d%d", &yy, &MM, &dd, &hh, &mm, &ss, &tz) < 6) return 0;
+    struct tm tmv = {};
+    tmv.tm_year = 100 + yy; tmv.tm_mon = MM - 1; tmv.tm_mday = dd;
+    tmv.tm_hour = hh; tmv.tm_min = mm; tmv.tm_sec = ss;
+    time_t e = mktime(&tmv);                     // fields are local-with-offset
+    if (e < 1700000000) return 0;
+    return (uint32_t)e - (int32_t)tz * 15 * 60;  // strip quarter-hour offset → UTC
+  }
+};
+MLCell cell;
+bool obdReady = false, gpsReady = false, sdReady = false, cellReady = false, cellBegun = false;
 uint32_t lastCellTry = 0;
 float lastBattV = 0;
+int sslVariant = -1;      // -1 = not yet discovered
 
 struct Sample {
   uint32_t epoch;
@@ -174,13 +248,26 @@ void connectWiFi() {
 }
 
 void tryCell() {
-  if (cellReady || millis() - lastCellTry < CELL_RETRY_MS) return;
+  if (cellReady) return;
+  if (lastCellTry != 0 && millis() - lastCellTry < CELL_RETRY_MS) return;  // 0 = never tried
   lastCellTry = millis();
   Serial.print("[CELL] init… ");
-  if (!cell.begin(&sys)) { Serial.println("no modem"); return; }
-  if (!cell.setup(CELL_APN)) { Serial.println("no network (SIM? signal?)"); return; }
+  // begin() power-cycles the modem — do it once, or every retry restarts the
+  // multi-minute LTE band scan from zero
+  if (!cellBegun) {
+    if (!cell.begin(&sys)) { Serial.println("no modem"); return; }
+    cellBegun = true;
+  }
+  if (!cell.setup(CELL_APN, 0, 0, 120000)) {   // fresh roaming SIMs can take minutes
+    Serial.println("no network yet (registration continues in background)");
+    return;
+  }
   cellReady = true;
   Serial.println("registered on LTE");
+  if (!epochBase) {
+    uint32_t e = cell.networkEpoch();
+    if (e) { epochBase = e; epochBaseMs = millis(); Serial.println("[CELL] clock synced from network"); }
+  }
 }
 
 // POST a prebuilt body via best transport; returns HTTP status (0 = no transport)
@@ -192,12 +279,18 @@ int postBody(const String& body) {
   }
   tryCell();
   if (!cellReady) return 0;
-  if (!cell.open(INGEST_HOST, 443)) { cellReady = false; return 0; }
-  if (!cell.send(METHOD_POST, INGEST_HOST, 443, INGEST_PATH, body.c_str(), body.length())) {
-    cellReady = false;
-    return 0;
+  // sslVariant is discovered once, then reused for the life of the boot
+  for (int v = (sslVariant >= 0 ? sslVariant : 0); v <= (sslVariant >= 0 ? sslVariant : 3); v++) {
+    int code = cell.post7670(INGEST_URL, body.c_str(), body.length(), v);
+    if (code >= 200 && code < 600) {
+      if (sslVariant != v) { sslVariant = v; Serial.printf("[CELL] TLS variant %d works\n", v); }
+      return code;
+    }
+    Serial.printf("[CELL] TLS variant %d -> %d\n", v, code);
+    if (sslVariant >= 0) break;            // already latched; don't loop on a blip
   }
-  return cell.code();
+  cellReady = false;
+  return 0;
 }
 
 // ---------- sampling ----------
@@ -326,7 +419,11 @@ void setup() {
   sdInit();
   connectWiFi();
   configTime(0, 0, "pool.ntp.org");
-  tryCell();      // register on LTE at boot even with WiFi up: idle-cheap, and
+  tryCell();
+  if (cellReady) {
+    int c = cell.post7670("http://postman-echo.com/post", "{\"t\":1}", 8, 3);
+    Serial.printf("[PROBE] plain-HTTP POST -> %d\n", c);
+  }      // register on LTE at boot even with WiFi up: idle-cheap, and
                   // the modem is ready the moment the truck leaves WiFi range
   pullConfig();
   lastConfig = millis();
