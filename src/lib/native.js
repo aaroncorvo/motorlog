@@ -22,11 +22,26 @@ export const oauthRedirect = () =>
 // session in the OS keystore-backed Preferences instead.
 export function makeAuthStorage() {
   if (!isNative()) return undefined            // supabase-js default: localStorage
-  // Lazy import keeps @capacitor/preferences out of the web bundle's hot path
+  // Lazy import keeps @capacitor/preferences out of the web bundle's hot path.
+  // Every call falls back to localStorage on failure: a plugin problem must
+  // degrade session persistence, never hang the auth check behind an
+  // unresolved promise (that shows as an infinite splash spinner).
   const load = () => import('@capacitor/preferences').then(m => m.Preferences)
+  const guard = async (fn, fallback) => {
+    try { return await fn() } catch (e) {
+      console.warn('[native] Preferences unavailable, using localStorage:', e?.message)
+      return fallback()
+    }
+  }
   return {
-    getItem: async (key) => (await (await load()).get({ key })).value ?? null,
-    setItem: async (key, value) => { await (await load()).set({ key, value }) },
-    removeItem: async (key) => { await (await load()).remove({ key }) },
+    getItem: (key) => guard(
+      async () => (await (await load()).get({ key })).value ?? null,
+      () => window.localStorage.getItem(key)),
+    setItem: (key, value) => guard(
+      async () => { await (await load()).set({ key, value }) },
+      () => window.localStorage.setItem(key, value)),
+    removeItem: (key) => guard(
+      async () => { await (await load()).remove({ key }) },
+      () => window.localStorage.removeItem(key)),
   }
 }

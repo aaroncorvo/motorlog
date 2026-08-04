@@ -60,10 +60,15 @@ export default function App() {
 
   useEffect(() => {
     if (configMissing) return
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session)
-      setAuthReady(true)
-    })
+    // A failed or slow session read must still reveal the login screen — an
+    // unresolved promise here renders as a permanent splash spinner.
+    const timeout = new Promise(resolve => setTimeout(() => resolve({ data: {} }), 8000))
+    Promise.race([supabase.auth.getSession(), timeout])
+      .catch(e => { console.warn('[auth] getSession failed:', e?.message); return { data: {} } })
+      .then(({ data }) => {
+        setSession(data?.session ?? null)
+        setAuthReady(true)
+      })
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s))
     return () => sub.subscription.unsubscribe()
   }, [])
