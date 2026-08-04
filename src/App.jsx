@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase, configMissing } from './lib/supabase.js'
-import { loadSeed } from './lib/seed.js'
 import { dailyRecallCheck } from './lib/recalls.js'
 import { fetchPlan } from './lib/plan.js'
 import Dashboard, { AddVehicleForm } from './components/Dashboard.jsx'
@@ -217,19 +216,7 @@ export default function App() {
 }
 
 function EmptyFleet({ refresh, showToast }) {
-  const [busy, setBusy] = useState(false)
   const [adding, setAdding] = useState(false)
-  const seed = async () => {
-    setBusy(true)
-    try {
-      await loadSeed(supabase)
-      showToast('FLEET LOADED')
-      await refresh()
-    } catch (e) {
-      showToast('ERROR: ' + e.message)
-      setBusy(false)
-    }
-  }
   if (adding) return (
     <>
       <div className="section-label">Add Your First Vehicle</div>
@@ -248,14 +235,9 @@ function EmptyFleet({ refresh, showToast }) {
           + ADD YOUR FIRST VEHICLE BY VIN
         </button>
       </div>
-      <div style={{ marginTop: 18 }}>
-        <button className="btn2" onClick={seed} disabled={busy}>
-          {busy ? 'LOADING…' : 'LOAD DEMO FLEET'}
-        </button>
-      </div>
-      <div style={{ marginTop: 12 }} className="note">
-        The demo loads a 4-vehicle Toyota/Lexus fleet with fuel history and
-        maintenance intervals so you can explore with real-shaped data.
+      <div style={{ marginTop: 14 }} className="note">
+        Decode the VIN and MotorLog fills in year, make, model, and engine specs.
+        Everything you log stays private to your account.
       </div>
     </div>
   )
