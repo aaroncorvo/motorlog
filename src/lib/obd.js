@@ -7,7 +7,9 @@
 import { isNative } from './native.js'
 
 // Known BLE UART-ish services used by ELM327 BLE dongles
-export const OBD_SERVICES = [0xFFF0, 0xFFE0, '0000fff0-0000-1000-8000-00805f9b34fb', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2']
+// 0xABF0 is the Freematics SPP service — our own dongle firmware (ml-0.6+)
+// bridges ELM327 over it (write FFE1 / notify FFE2)
+export const OBD_SERVICES = [0xFFF0, 0xFFE0, 0xABF0, '0000fff0-0000-1000-8000-00805f9b34fb', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2']
 
 export const INIT_COMMANDS = ['ATZ', 'ATE0', 'ATL0', 'ATS0', 'ATH0', 'ATSP0']
 

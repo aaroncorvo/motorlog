@@ -16,6 +16,7 @@
 #include <SPI.h>
 #include <SD.h>
 #include "http_transport.h"
+#include "ble_bridge.h"
 #include "secrets.h"
 
 #define SAMPLE_INTERVAL_MS 1000
@@ -26,7 +27,7 @@
 #define MAX_CHUNK 240             // samples per spool file (~36KB batch string)
 #define RAM_BUF 900               // fallback when no SD card
 #define LOW_BATT_V 11.9f
-#define FW_VERSION "ml-0.5"
+#define FW_VERSION "ml-0.6"
 #define DTC_SCAN_MS (10 * 60 * 1000UL)
 
 FreematicsESP32 sys;
@@ -286,7 +287,13 @@ void tryCell() {
 
 // POST a prebuilt body via best transport; returns HTTP status (0 = no transport)
 int postBody(const String& body) {
-  if (wifiUp()) return mlPost(INGEST_URL, SUPABASE_ANON, DEVICE_KEY, body);
+  if (wifiUp()) {
+    int code = mlPost(INGEST_URL, SUPABASE_ANON, DEVICE_KEY, body);
+    if (code > 0) return code;
+    // WiFi TLS can starve for heap while BLE is resident (ml-0.6+): the
+    // modem does its own crypto, so fall through to the cellular path
+    Serial.println("[WIFI] TLS post failed — falling back to cellular");
+  }
   if (lastBattV > 0 && lastBattV < LOW_BATT_V) {
     Serial.println("[CELL] skipped — battery low");
     return 0;
@@ -338,6 +345,14 @@ void takeSample() {
       s.battV    = obd.getVoltage();
       lastBattV  = s.battV;
     }
+  }
+
+  // feed the BLE live cache — the phone's gauges read from here, never the bus
+  bleLive.valid = s.haveObd;
+  if (s.haveObd) {
+    bleLive.rpm = s.rpm; bleLive.speedKph = s.speedObd;
+    bleLive.coolantC = s.coolant; bleLive.fuelPct = s.fuelPct;
+    bleLive.battV = s.battV;
   }
 
   bool moving = s.haveGps && s.speedKph > 3.0f;
@@ -495,10 +510,26 @@ void tryObd() {
   }
 }
 
+// BLE bridge hooks — run from loop() context, so sharing the OBD link is safe
+int bleReadDtcsHook(uint16_t* codes, int maxN) {
+  if (!obdReady) return 0;
+  int n = obd.readDTC(codes, maxN);
+  return n < 0 ? 0 : n;
+}
+bool bleClearDtcsHook() {
+  if (!obdReady) return false;
+  obd.clearDTC();
+  return true;
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.println("\n[MOTORLOG] " FW_VERSION " starting");
   sys.begin(true, true);                     // co-proc + cellular power rail on
+
+  // BLE first: btStart wants a big contiguous heap block — grab it before
+  // WiFi and the cellular stack fragment the arena
+  bleBridgeInit("MotorLog OBD");
 
   obd.begin(sys.link);
   obdReady = obd.init();
@@ -544,5 +575,6 @@ void loop() {
     lastOdoRead = now;
     readOdometer();
   }
+  bleBridgeProcess();
   delay(20);
 }
