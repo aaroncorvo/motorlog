@@ -16,24 +16,18 @@ app repo and copy this folder to `Freematics/firmware_v5/motorlog/` (the
 Config changes (interval, WiFi for the NEXT flash) are made in the app:
 Settings → Devices → CONFIG. The device pulls config hourly and at boot.
 
-## Cellular status (SIM7670G, Hologram)
+## Cellular status (SIM7670G, Hologram) — WORKING
 
-Working: SIM detected, LTE registration on AT&T band 2 (RSSI ~-89 dBm),
-network-clock sync, and **plain-HTTP POST returns 200** over cellular.
+Registered on AT&T LTE, network-clock synced, HTTPS POSTs delivering.
 
-Blocked: **HTTPS returns +HTTPACTION 715 (TLS handshake failure)** against
-Supabase on every SSL config tried — sslversion 3 (TLS1.2) and 4 (any),
-authmode 0, enableSNI 1, ignorelocaltime 1, and modem defaults. Since plain
-HTTP succeeds on the same connection, the data path is fine; the modem's TLS
-stack is the blocker (firmware V1.9.04).
+The one obstacle was a CA-trust mismatch, diagnosed by probing three URLs from
+the device: plain HTTP returned 200, TLS to Netlify returned 404 (a real HTTP
+response, so the handshake succeeded), and TLS to Supabase returned +HTTPACTION
+715 (handshake failure). Supabase is signed by Google Trust Services; Netlify by
+Let's Encrypt. This modem's CA store carries ISRG but not the newer GTS roots.
 
-Options to resolve, in order of preference:
-1. Load a CA bundle onto the modem (AT+CCERTDOWN) and set authmode 1 — some
-   SIM7670G builds fail handshake when no CA is present rather than skipping
-   verification as authmode 0 implies.
-2. Update the SIM7670G module firmware (SIMCom release newer than V1.9.04).
-3. An HTTP-only ingest endpoint fronted by a TLS-terminating proxy — rejected
-   for now: it would put the device key on the wire in the clear.
-
-Until then the device runs WiFi + SD spooling: full trips are captured to the
-card regardless of length and delivered whenever it's back in WiFi range.
+Fix: cellular traffic goes to `https://motorlog.netlify.app/api/ingest`
+(netlify/functions/ingest.js), which terminates the device's TLS on a CA it
+trusts and forwards to the ingest-telemetry edge function over Netlify's own
+verified TLS. The device key stays inside the encrypted body on both hops.
+WiFi still posts to Supabase directly.

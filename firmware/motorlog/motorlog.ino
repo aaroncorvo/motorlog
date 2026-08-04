@@ -280,8 +280,10 @@ int postBody(const String& body) {
   tryCell();
   if (!cellReady) return 0;
   // sslVariant is discovered once, then reused for the life of the boot
+  // Cellular goes through the Netlify relay: this modem's CA store trusts
+  // Let's Encrypt (Netlify) but not Google Trust Services (Supabase direct).
   for (int v = (sslVariant >= 0 ? sslVariant : 0); v <= (sslVariant >= 0 ? sslVariant : 3); v++) {
-    int code = cell.post7670(INGEST_URL, body.c_str(), body.length(), v);
+    int code = cell.post7670(RELAY_URL, body.c_str(), body.length(), v);
     if (code >= 200 && code < 600) {
       if (sslVariant != v) { sslVariant = v; Serial.printf("[CELL] TLS variant %d works\n", v); }
       return code;
@@ -422,12 +424,8 @@ void setup() {
   sdInit();
   connectWiFi();
   configTime(0, 0, "pool.ntp.org");
-  tryCell();
-  if (cellReady) {
-    int c = cell.post7670("http://postman-echo.com/post", "{\"t\":1}", 8, 3);
-    Serial.printf("[PROBE] plain-HTTP POST -> %d\n", c);
-  }      // register on LTE at boot even with WiFi up: idle-cheap, and
-                  // the modem is ready the moment the truck leaves WiFi range
+  tryCell();      // register on LTE at boot even with WiFi up, so the modem is
+                  // ready the moment the truck leaves WiFi range
   pullConfig();
   lastConfig = millis();
 }
