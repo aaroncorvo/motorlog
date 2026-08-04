@@ -79,10 +79,13 @@ export class DriveSession {
   }
 
   async start() {
+    // GPS-only mode (conn == null): no dongle on the phone — position samples
+    // merge server-side with whatever the installed telematics device uploads
+    // for the same vehicle (its GPS antenna may be buried under the dash).
     // check-engine snapshot at trip start: stored codes ride with the first
     // upload and raise dedupe-keyed alerts server-side
     try {
-      const { stored } = await this.conn.readDtcs()
+      const { stored } = this.conn ? await this.conn.readDtcs() : {}
       this.dtcs = stored?.length ? stored : null
     } catch { this.dtcs = null }
     await this.#startGps()
@@ -90,7 +93,7 @@ export class DriveSession {
       if (this.busy) return
       this.busy = true
       try {
-        const pids = await this.conn.readPids(LIVE_PIDS)
+        const pids = this.conn ? await this.conn.readPids(LIVE_PIDS) : null
         const s = sampleFromReadings(pids, this.lastPos)
         // keep only samples that carry something worth storing
         if (s.rpm != null || s.lat != null) {

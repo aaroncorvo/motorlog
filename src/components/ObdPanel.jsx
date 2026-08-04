@@ -63,9 +63,9 @@ export default function ObdPanel({ vehicle, refresh, showToast }) {
     }
   }
 
-  const startRecording = async () => {
+  const startRecording = async (gpsOnly = false) => {
     setErr(null)
-    const session = new DriveSession(connRef.current, vehicle.id, {
+    const session = new DriveSession(gpsOnly ? null : connRef.current, vehicle.id, {
       onSample: (_s, n) => setRec(r => ({ ...(r || { uploaded: 0 }), samples: (r?.samples || 0) + 1, buffered: n })),
       onUpload: (uploaded) => setRec(r => ({ ...(r || { samples: 0 }), uploaded, err: null })),
       onError: (e) => setRec(r => (r ? { ...r, err: e.message?.slice(0, 40) } : r)),
@@ -139,10 +139,28 @@ export default function ObdPanel({ vehicle, refresh, showToast }) {
   if (!bleSupported()) {
     return (
       <div className="card">
-        <div className="note">
+        {rec ? (
+          <>
+            <button className="btn" onClick={stopRecording}
+              style={{ background: 'var(--red)', borderColor: 'var(--red)' }}>
+              ■ STOP GPS RECORDING
+            </button>
+            <div className="note" style={{ marginTop: 8 }}>
+              GPS track recording · {rec.samples} positions · {rec.uploaded} uploaded
+              {rec.err ? ` · retrying (${rec.err})` : ''}
+            </div>
+          </>
+        ) : (
+          <button className="btn2" onClick={() => startRecording(true)}
+            style={{ color: 'var(--amber)', borderColor: 'rgba(255,176,0,0.4)' }}>
+            ● RECORD GPS TRACK (NO DONGLE)
+          </button>
+        )}
+        <div className="note" style={{ marginTop: 10 }}>
           Bluetooth OBD-II works in Chrome or Edge (computer / Android phone) today —
           iPhone support ships with the App Store version. Use a BLE dongle:
-          Vgate iCar Pro BLE 4.0, OBDLink CX, or Veepeak BLE+.
+          Vgate iCar Pro BLE 4.0, OBDLink CX, or Veepeak BLE+. GPS-track recording
+          works everywhere — engine data merges in from an installed telematics device.
         </div>
       </div>
     )
@@ -151,9 +169,27 @@ export default function ObdPanel({ vehicle, refresh, showToast }) {
   return (
     <div className="card">
       {state !== 'live' ? (
+        rec ? (
+          <>
+            <button className="btn" onClick={stopRecording}
+              style={{ background: 'var(--red)', borderColor: 'var(--red)' }}>
+              ■ STOP GPS RECORDING
+            </button>
+            <div className="note" style={{ marginTop: 8 }}>
+              GPS track recording · {rec.samples} positions · {rec.uploaded} uploaded
+              {rec.err ? ` · retrying (${rec.err})` : ''} — engine data merges in from the
+              installed telematics device.
+            </div>
+          </>
+        ) : (
         <>
           <button className="btn" onClick={() => connect(false)} disabled={state === 'connecting'}>
             {state === 'connecting' ? 'CONNECTING…' : '⌁ CONNECT OBD-II DONGLE'}
+          </button>
+          <div style={{ height: 8 }} />
+          <button className="btn2" onClick={() => startRecording(true)}
+            style={{ color: 'var(--amber)', borderColor: 'rgba(255,176,0,0.4)' }}>
+            ● RECORD GPS TRACK (NO DONGLE)
           </button>
           {triedFiltered && state === 'idle' && (
             <>
@@ -172,6 +208,7 @@ export default function ObdPanel({ vehicle, refresh, showToast }) {
           </div>
           {err && <div className="err" style={{ marginTop: 8 }}>{err}</div>}
         </>
+        )
       ) : (
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
@@ -203,7 +240,7 @@ export default function ObdPanel({ vehicle, refresh, showToast }) {
             </>
           ) : (
             <>
-              <button className="btn2" onClick={startRecording}
+              <button className="btn2" onClick={() => startRecording(false)}
                 style={{ color: 'var(--amber)', borderColor: 'rgba(255,176,0,0.4)' }}>
                 ● RECORD DRIVE {isNative() ? '(phone GPS + engine)' : '(engine + browser GPS)'}
               </button>
