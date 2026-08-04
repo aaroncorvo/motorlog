@@ -8,7 +8,9 @@
 // (fully verified) TLS. The device key stays inside the encrypted body on both
 // hops — it is never sent in the clear.
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || 'https://fxycfrtycqxdlhrpfeiv.supabase.co'
-const ANON = process.env.VITE_SUPABASE_KEY
+// publishable key — client-safe by design; env var isn't guaranteed in the
+// functions scope, so the fallback keeps the relay working either way
+const ANON = process.env.VITE_SUPABASE_KEY || 'sb_publishable_orIYaCrJ5hG6EWOKDjWyqg_JzXmiCmh'
 
 export default async (req) => {
   if (req.method === 'OPTIONS') {
@@ -25,6 +27,7 @@ export default async (req) => {
     headers: {
       'content-type': 'application/json',
       apikey: ANON,
+      authorization: `Bearer ${ANON}`,   // edge gateway requires this even with JWT verify off
       ...(req.headers.get('x-device-key') ? { 'x-device-key': req.headers.get('x-device-key') } : {}),
     },
     body,
