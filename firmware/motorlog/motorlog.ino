@@ -26,7 +26,7 @@
 #define MAX_CHUNK 240             // samples per spool file (~36KB batch string)
 #define RAM_BUF 900               // fallback when no SD card
 #define LOW_BATT_V 11.9f
-#define FW_VERSION "ml-0.4"
+#define FW_VERSION "ml-0.5"
 #define DTC_SCAN_MS (10 * 60 * 1000UL)
 
 FreematicsESP32 sys;
@@ -128,6 +128,9 @@ uint32_t lastPost = 0, lastConfig = 0, lastSample = 0, lastHeartbeat = 0, lastOb
 uint32_t epochBase = 0, epochBaseMs = 0;
 uint32_t lastDtcScan = 0;
 char dtcJson[128] = "";              // e.g. "P0301","P0420" — sent with next batch, then cleared
+long odoKm = -1;                     // true odometer when the vehicle answers, else -1
+uint32_t lastOdoRead = 0;
+#define ODO_READ_MS (10 * 60 * 1000UL)
 
 // ---------- time ----------
 void syncTimeFromGps(GPS_DATA* gd) {
@@ -222,6 +225,7 @@ bool oldestChunk(uint32_t& seq) {
 String batchHeader() {
   String h = "{\"device_key\":\"" DEVICE_KEY "\",\"fw_version\":\"" FW_VERSION "\"";
   if (dtcJson[0]) { h += ",\"dtcs\":["; h += dtcJson; h += "]"; }
+  if (odoKm > 0) { h += ",\"odo_km\":" + String(odoKm); }
   h += ",\"batch\":[";
   return h;
 }
@@ -432,10 +436,63 @@ void scanDtcs() {
   Serial.printf("[DTC] %d stored: %s\n", n, dtcJson);
 }
 
+// ---------- odometer ----------
+// Pull hex bytes that follow a response marker like "41 A6" or "61 28".
+// Returns count parsed (co-processor replies use space-separated hex).
+int parseHexAfter(const char* resp, const char* marker, uint8_t* out, int maxN) {
+  const char* p = strstr(resp, marker);
+  if (!p) return 0;
+  p += strlen(marker);
+  int n = 0;
+  while (n < maxN) {
+    while (*p == ' ' || *p == '\r' || *p == '\n') p++;
+    if (!isxdigit(*p) || !isxdigit(*(p + 1))) break;
+    char b[3] = { p[0], p[1], 0 };
+    out[n++] = (uint8_t)strtol(b, nullptr, 16);
+    p += 2;
+  }
+  return n;
+}
+
+// True odometer, two attempts:
+//  1. SAE J1979 PID 01 A6 (odometer in 0.1 km) — vehicles ~2019+
+//  2. Toyota/Lexus combination meter (CAN 7C0): service 21 PID 28 — the same
+//     read Techstream uses; odometer km in the 3 bytes after "61 28".
+// Either failing is normal (bench, older car); we keep the fill-up estimate.
+void readOdometer() {
+  if (!obdReady || !sys.link) return;
+  char buf[128];
+  if (sys.link->sendCommand("01A6\r", buf, sizeof(buf), 1000) > 0) {
+    uint8_t b[4];
+    if (parseHexAfter(buf, "41 A6", b, 4) == 4) {
+      long v = ((long)b[0] << 24 | (long)b[1] << 16 | (long)b[2] << 8 | b[3]) / 10;
+      if (v > 0 && v < 2000000) { odoKm = v; Serial.printf("[ODO] PID A6: %ld km\n", v); return; }
+    }
+  }
+  if (sys.link->sendCommand("ATSH7C0\r", buf, sizeof(buf), 1000) > 0) {
+    int n = sys.link->sendCommand("2128\r", buf, sizeof(buf), 1500);
+    sys.link->sendCommand("ATSH7DF\r", buf, sizeof(buf), 1000);   // restore broadcast
+    if (n > 0) {
+      uint8_t b[3];
+      char resp[128];
+      strncpy(resp, buf, sizeof(resp) - 1); resp[sizeof(resp) - 1] = 0;
+      if (parseHexAfter(resp, "61 28", b, 3) == 3) {
+        long v = (long)b[0] << 16 | (long)b[1] << 8 | b[2];
+        if (v > 0 && v < 2000000) { odoKm = v; Serial.printf("[ODO] Toyota 7C0: %ld km\n", v); return; }
+      }
+    }
+  }
+  Serial.println("[ODO] not readable on this vehicle");
+}
+
 void tryObd() {
   obd.begin(sys.link);
   obdReady = obd.init(PROTO_AUTO, true);
-  if (obdReady) { Serial.println("[OBD] connected"); scanDtcs(); lastDtcScan = millis(); }
+  if (obdReady) {
+    Serial.println("[OBD] connected");
+    scanDtcs(); lastDtcScan = millis();
+    readOdometer(); lastOdoRead = millis();
+  }
 }
 
 void setup() {
@@ -482,6 +539,10 @@ void loop() {
   if (obdReady && now - lastDtcScan >= DTC_SCAN_MS) {
     lastDtcScan = now;
     scanDtcs();
+  }
+  if (obdReady && now - lastOdoRead >= ODO_READ_MS) {
+    lastOdoRead = now;
+    readOdometer();
   }
   delay(20);
 }

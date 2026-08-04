@@ -175,6 +175,10 @@ Deno.serve(async (req) => {
       body: JSON.stringify({
         last_seen_at: new Date().toISOString(),
         ...(typeof body.fw_version === "string" ? { fw_version: body.fw_version.slice(0, 40) } : {}),
+        // true odometer read over OBD (PID A6 or Toyota 7C0/2128) — the
+        // authoritative mileage source when present (columns from 0024)
+        ...(typeof body.odo_km === "number" && body.odo_km > 0 && body.odo_km < 2000000
+          ? { odo_km: body.odo_km, odo_at: new Date().toISOString() } : {}),
       }),
     }).catch(() => {});
 
