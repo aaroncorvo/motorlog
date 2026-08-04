@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase.js'
 import { computeMpg } from '../lib/calc.js'
 import { downscaleImage } from '../lib/images.js'
 import { planStatus } from '../lib/plan.js'
+import { oauthRedirect } from '../lib/native.js'
 
 function FeedbackCard({ me, plan, showToast }) {
   const [msg, setMsg] = useState('')
@@ -299,7 +300,7 @@ export default function DataScreen({ vehicles, fuelLogs, serviceLogs, maintItems
     try {
       const state = crypto.randomUUID()
       sessionStorage.setItem('gdrive_state', state)
-      const { url } = await driveCall({ action: 'auth-url', redirect_uri: location.origin + '/', state })
+      const { url } = await driveCall({ action: 'auth-url', redirect_uri: oauthRedirect(), state })
       location.href = url
     } catch (e) { showToast('ERROR: ' + e.message) }
   }

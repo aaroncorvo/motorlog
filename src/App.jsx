@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase, configMissing } from './lib/supabase.js'
 import { dailyRecallCheck } from './lib/recalls.js'
 import { fetchPlan } from './lib/plan.js'
+import { isNative, oauthRedirect } from './lib/native.js'
 import Dashboard, { AddVehicleForm } from './components/Dashboard.jsx'
 import FuelScreen from './components/FuelScreen.jsx'
 import ServiceScreen from './components/ServiceScreen.jsx'
@@ -138,7 +139,30 @@ export default function App() {
     })
   }, [vehicles, recalls, recallsError, refresh, showToast])
 
+  // Native builds receive the OAuth code as a universal/app link rather than a
+  // page load, so push it into the same query-param path the web flow uses.
+  useEffect(() => {
+    if (!isNative()) return
+    let remove
+    import('@capacitor/app').then(({ App: CapApp }) => {
+      CapApp.addListener('appUrlOpen', ({ url }) => {
+        const q = url.includes('?') ? url.slice(url.indexOf('?')) : ''
+        if (q.includes('code=')) {
+          window.history.replaceState({}, '', window.location.pathname + q)
+          window.dispatchEvent(new Event('ml-oauth-return'))
+        }
+      }).then(h => { remove = () => h.remove() })
+    })
+    return () => remove?.()
+  }, [])
+
   // Google Drive OAuth redirect: ?code=...&state=... lands back on the app root
+  const [oauthTick, setOauthTick] = useState(0)
+  useEffect(() => {
+    const bump = () => setOauthTick(t => t + 1)
+    window.addEventListener('ml-oauth-return', bump)
+    return () => window.removeEventListener('ml-oauth-return', bump)
+  }, [])
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const code = params.get('code'), state = params.get('state')
@@ -147,12 +171,12 @@ export default function App() {
     if (state !== sessionStorage.getItem('gdrive_state')) { showToast('DRIVE CONNECT FAILED: state mismatch'); return }
     sessionStorage.removeItem('gdrive_state')
     supabase.functions.invoke('google-drive', {
-      body: { action: 'exchange', code, redirect_uri: window.location.origin + '/' },
+      body: { action: 'exchange', code, redirect_uri: oauthRedirect() },
     }).then(({ data, error }) => {
       if (error || data?.error) showToast('DRIVE CONNECT FAILED: ' + (data?.error || error.message))
       else { showToast('GOOGLE DRIVE CONNECTED — ' + (data.email || '')); setTab('Settings') }
     })
-  }, [session, showToast])
+  }, [session, showToast, oauthTick])
 
   if (configMissing) return (
     <div className="empty" style={{ paddingTop: '30vh' }}>
