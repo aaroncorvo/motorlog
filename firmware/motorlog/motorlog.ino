@@ -299,7 +299,10 @@ void takeSample() {
   s.epoch = nowEpoch();
 
   GPS_DATA* gd = nullptr;
-  if (gpsReady && sys.gpsGetData(&gd) && gd && gd->sat >= 3) {
+  // sat>=3 alone isn't a fix: the co-processor reports satellites in view and
+  // zeroed coordinates before it has a position lock. Require real coordinates.
+  if (gpsReady && sys.gpsGetData(&gd) && gd && gd->sat >= 4 &&
+      (gd->lat != 0 || gd->lng != 0) && fabs(gd->lat) <= 90 && fabs(gd->lng) <= 180) {
     syncTimeFromGps(gd);
     if (!s.epoch) s.epoch = nowEpoch();
     s.haveGps = true;
