@@ -4,6 +4,8 @@
 // for the iOS app later. BLE dongles only (Vgate iCar Pro BLE, OBDLink CX,
 // Veepeak BLE+) — Bluetooth-Classic ELM327s can't talk to iPhones anyway.
 
+import { isNative } from './native.js'
+
 // Known BLE UART-ish services used by ELM327 BLE dongles
 export const OBD_SERVICES = [0xFFF0, 0xFFE0, '0000fff0-0000-1000-8000-00805f9b34fb', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2']
 
@@ -69,9 +71,22 @@ export function decodeDtcs(raw, marker = '43') {
   return out
 }
 
-// ===== Web Bluetooth transport =====
+// ===== Transport selection =====
+// Web Bluetooth on desktop/Android browsers; Capacitor BLE in the native apps
+// (iOS has no Web Bluetooth — the reason the wrapper exists).
 export function bleSupported() {
+  if (isNative()) return true
   return typeof navigator !== 'undefined' && !!navigator.bluetooth
+}
+
+// Returns a connection object with a common interface: connect(), send(),
+// readPids(), readDtcs(), clearDtcs(), disconnect().
+export async function createObdConnection() {
+  if (isNative()) {
+    const { NativeObdConnection } = await import('./obdNative.js')
+    return new NativeObdConnection()
+  }
+  return new ObdConnection()
 }
 
 export class ObdConnection {

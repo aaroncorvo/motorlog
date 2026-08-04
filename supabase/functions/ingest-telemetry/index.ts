@@ -51,22 +51,59 @@ Deno.serve(async (req) => {
     if (req.method !== "GET") {
       try { body = await req.json(); } catch { /* handled by validators below */ }
     }
-    const key = req.headers.get("x-device-key") ??
-      (typeof body.device_key === "string" ? body.device_key : null);
-    if (!key) return json({ error: "device key required" }, 401);
-
     const url = Deno.env.get("SUPABASE_URL")!;
     const svc = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const H = { apikey: svc, authorization: `Bearer ${svc}`, "content-type": "application/json" };
 
-    const hash = await sha256hex(key);
-    const devRes = await fetch(
-      `${url}/rest/v1/devices?api_key_hash=eq.${hash}&select=id,user_id,vehicle_id&limit=1`,
-      { headers: H },
-    );
-    const devices = devRes.ok ? await devRes.json() : [];
-    if (!devices.length) return json({ error: "unknown device" }, 403);
-    const dev = devices[0];
+    const key = req.headers.get("x-device-key") ??
+      (typeof body.device_key === "string" ? body.device_key : null);
+
+    // Two authentication paths:
+    //  - hardware device: per-device API key (header or body)
+    //  - phone app: the user's own JWT + an explicit vehicle_id, for batches
+    //    assembled from a BLE dongle plus phone GPS (no device row exists)
+    let dev: { id: string | null; user_id: string; vehicle_id: string | null };
+    let source = "device";
+
+    if (key) {
+      const hash = await sha256hex(key);
+      const devRes = await fetch(
+        `${url}/rest/v1/devices?api_key_hash=eq.${hash}&select=id,user_id,vehicle_id&limit=1`,
+        { headers: H },
+      );
+      const devices = devRes.ok ? await devRes.json() : [];
+      if (!devices.length) return json({ error: "unknown device" }, 403);
+      dev = devices[0];
+    } else {
+      const jwt = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+      const vehicleId = typeof body.vehicle_id === "string" ? body.vehicle_id : null;
+      if (!jwt || !vehicleId) {
+        return json({ error: "device key, or user JWT + vehicle_id, required" }, 401);
+      }
+      const uRes = await fetch(`${url}/auth/v1/user`, {
+        headers: { apikey: svc, authorization: `Bearer ${jwt}` },
+      });
+      if (!uRes.ok) return json({ error: "invalid session" }, 401);
+      const user = await uRes.json();
+      // the vehicle must belong to a fleet this user can write to
+      const vRes = await fetch(
+        `${url}/rest/v1/vehicles?id=eq.${vehicleId}&select=id,user_id&limit=1`,
+        { headers: H },
+      );
+      const vs = vRes.ok ? await vRes.json() : [];
+      if (!vs.length) return json({ error: "unknown vehicle" }, 403);
+      const owner = vs[0].user_id;
+      if (owner !== user.id) {
+        const mRes = await fetch(
+          `${url}/rest/v1/fleet_members?owner_user_id=eq.${owner}&member_email=ilike.${encodeURIComponent(user.email)}&select=id&limit=1`,
+          { headers: H },
+        );
+        const ms = mRes.ok ? await mRes.json() : [];
+        if (!ms.length) return json({ error: "not a member of this fleet" }, 403);
+      }
+      dev = { id: null, user_id: owner, vehicle_id: vehicleId };
+      source = "phone";
+    }
 
     // Config pull: GET (WiFi) or POST {action:'config'} (cellular).
     if (req.method === "GET" || body.action === "config") {
@@ -91,6 +128,7 @@ Deno.serve(async (req) => {
       if (!ts) continue;
       rows.push({
         device_id: dev.id, user_id: dev.user_id, vehicle_id: dev.vehicle_id,
+        source,
         ts,
         lat: num(r.lat), lon: num(r.lon),
         speed_kph: num(r.speed_kph), heading: num(r.heading), hdop: num(r.hdop),
@@ -110,7 +148,7 @@ Deno.serve(async (req) => {
     if (!ins.ok) return json({ error: `insert failed: ${await ins.text()}` }, 500);
 
     // touch the device (fire-and-forget semantics; errors ignored)
-    await fetch(`${url}/rest/v1/devices?id=eq.${dev.id}`, {
+    if (dev.id) await fetch(`${url}/rest/v1/devices?id=eq.${dev.id}`, {
       method: "PATCH",
       headers: { ...H, Prefer: "return=minimal" },
       body: JSON.stringify({

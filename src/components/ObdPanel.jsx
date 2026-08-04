@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase.js'
-import { bleSupported, ObdConnection, PIDS } from '../lib/obd.js'
+import { bleSupported, createObdConnection, PIDS } from '../lib/obd.js'
+import { DriveSession } from '../lib/driveSession.js'
+import { isNative } from '../lib/native.js'
 import { describeDtc, explainDtcs } from '../lib/dtc.js'
 
 const LIVE_PIDS = ['0C', '0D', '05', '2F', '42']
@@ -15,10 +17,16 @@ export default function ObdPanel({ vehicle, refresh, showToast }) {
   const [diag, setDiag] = useState(null)       // AI diagnosis result
   const [busyBtn, setBusyBtn] = useState(null) // 'read' | 'explain' | 'clear' | 'log'
   const [err, setErr] = useState(null)
+  const [triedFiltered, setTriedFiltered] = useState(false)
+  const [rec, setRec] = useState(null)        // { samples, uploaded } while recording
   const connRef = useRef(null)
   const pollRef = useRef(null)
+  const sessionRef = useRef(null)
 
   const stop = () => {
+    sessionRef.current?.stop().catch(() => {})
+    sessionRef.current = null
+    setRec(null)
     clearInterval(pollRef.current)
     connRef.current?.disconnect()
     connRef.current = null
@@ -27,12 +35,10 @@ export default function ObdPanel({ vehicle, refresh, showToast }) {
   useEffect(() => stop, [])                    // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { stop() }, [vehicle.id])    // eslint-disable-line react-hooks/exhaustive-deps
 
-  const [triedFiltered, setTriedFiltered] = useState(false)
-
   const connect = async (allDevices = false) => {
     setState('connecting'); setErr(null)
     try {
-      const conn = new ObdConnection()
+      const conn = await createObdConnection()
       const name = await conn.connect(allDevices)
       connRef.current = conn
       setDeviceName(name)
@@ -55,6 +61,27 @@ export default function ObdPanel({ vehicle, refresh, showToast }) {
         setState('error')
       }
     }
+  }
+
+  const startRecording = async () => {
+    setErr(null)
+    const session = new DriveSession(connRef.current, vehicle.id, {
+      onSample: (_s, n) => setRec(r => ({ ...(r || { uploaded: 0 }), samples: (r?.samples || 0) + 1, buffered: n })),
+      onUpload: (uploaded) => setRec(r => ({ ...(r || { samples: 0 }), uploaded, err: null })),
+      onError: (e) => setRec(r => (r ? { ...r, err: e.message?.slice(0, 40) } : r)),
+    })
+    sessionRef.current = session
+    setRec({ samples: 0, uploaded: 0 })
+    try { await session.start() }
+    catch (e) { setErr('Recording failed: ' + e.message); sessionRef.current = null; setRec(null) }
+  }
+
+  const stopRecording = async () => {
+    const n = await sessionRef.current?.stop()
+    sessionRef.current = null
+    setRec(null)
+    showToast(n ? `DRIVE SAVED — ${n} SAMPLES` : 'RECORDING STOPPED')
+    await refresh()
   }
 
   const readCodes = async () => {
@@ -163,6 +190,26 @@ export default function ObdPanel({ vehicle, refresh, showToast }) {
             ))}
           </div>
           <div style={{ height: 12 }} />
+          {rec ? (
+            <>
+              <button className="btn" onClick={stopRecording}
+                style={{ background: 'var(--red)', borderColor: 'var(--red)' }}>
+                ■ STOP RECORDING
+              </button>
+              <div className="note" style={{ marginTop: 8 }}>
+                Recording · {rec.samples} samples captured · {rec.uploaded} uploaded
+                {rec.err ? ` · retrying (${rec.err})` : ''}
+              </div>
+            </>
+          ) : (
+            <>
+              <button className="btn2" onClick={startRecording}
+                style={{ color: 'var(--amber)', borderColor: 'rgba(255,176,0,0.4)' }}>
+                ● RECORD DRIVE {isNative() ? '(phone GPS + engine)' : '(engine + browser GPS)'}
+              </button>
+              <div style={{ height: 8 }} />
+            </>
+          )}
           <button className="btn2" onClick={readCodes} disabled={busyBtn === 'read'}>
             {busyBtn === 'read' ? 'READING…' : 'READ CHECK-ENGINE CODES'}
           </button>
