@@ -10,7 +10,7 @@ function recallBlurb(r) {
 // NHTSA recalls API has no CORS. On the web it's proxied via netlify.toml
 // (/nhtsa/* -> api.nhtsa.gov/*); native builds call it directly through
 // CapacitorHttp, which isn't subject to CORS (see lib/native.js).
-import { nhtsaBase } from './native.js'
+import { nhtsaBase, nativeGetJson, isNative as isNativePlatformSafe } from './native.js'
 // Model naming differs from ours ("GX 460" vs "GX460"), so try variants until one hits.
 export function modelVariants(model) {
   const m = model.trim()
@@ -24,7 +24,9 @@ async function fetchRecalls(vehicle) {
   for (const model of modelVariants(vehicle.model)) {
     const u = `${nhtsaBase()}/recalls/recallsByVehicle?make=${encodeURIComponent(vehicle.make)}&model=${encodeURIComponent(model)}&modelYear=${vehicle.year}`
     try {
-      const r = await fetch(u)
+      const r = isNativePlatformSafe()
+        ? { ok: true, json: async () => nativeGetJson(u) }
+        : await fetch(u)
       if (!r.ok) continue
       const d = await r.json()
       if (d.Count > 0) return d.results || []

@@ -4,7 +4,7 @@
   "webDir": "dist",
   "plugins": {
     "CapacitorHttp": {
-      "enabled": true
+      "enabled": false
     },
     "SplashScreen": {
       "backgroundColor": "#0A0A0B",

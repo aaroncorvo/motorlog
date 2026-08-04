@@ -45,3 +45,13 @@ export function makeAuthStorage() {
       () => window.localStorage.removeItem(key)),
   }
 }
+
+// Scoped native HTTP GET returning parsed JSON — used only where the target
+// API lacks CORS headers (NHTSA). The global CapacitorHttp fetch patch is OFF
+// because it breaks Supabase auth; this helper touches nothing else.
+export async function nativeGetJson(url) {
+  const { CapacitorHttp } = await import('@capacitor/core')
+  const res = await CapacitorHttp.get({ url, responseType: 'json' })
+  if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`)
+  return typeof res.data === 'string' ? JSON.parse(res.data) : res.data
+}
