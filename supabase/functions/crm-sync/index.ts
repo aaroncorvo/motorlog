@@ -3,13 +3,14 @@
 // trial-ending, payment-failed, upgrade nudges). Full idempotent upsert each
 // run — fine at beta scale, no queue to break.
 // Deploy with Verify JWT **OFF** (cron-secret auth, same pattern as google-drive).
-// Secrets: GHL_API_KEY (private integration token), GHL_LOCATION_ID, CRON_SECRET.
+// Secrets: GHL_API_KEY (private integration token), GHL_LOCATION_ID,
+// GDRIVE_CRON_SECRET (the project's shared cron secret — already set).
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const GHL = 'https://services.leadconnectorhq.com'
 
 Deno.serve(async (req) => {
-  if (req.headers.get('x-cron-secret') !== Deno.env.get('CRON_SECRET')) {
+  if (req.headers.get('x-cron-secret') !== Deno.env.get('GDRIVE_CRON_SECRET')) {
     return new Response('forbidden', { status: 403 })
   }
   const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
