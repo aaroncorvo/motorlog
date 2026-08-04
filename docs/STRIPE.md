@@ -13,11 +13,12 @@ never touches our code or database.
    **recurring yearly** price:
    - MotorLog Individual — $24/year
    - MotorLog Family — $48/year
-   - MotorLog Commercial — $180/year
-   Copy each **price ID** (`price_…`).
+   - MotorLog Extra Vehicle — $12/year (family add-on, quantity = slots)
+   Commercial is NOT self-serve — special licensing by contact; grant it with a
+   provider='comp' subscriptions row. Copy each **price ID** (`price_…`).
 3. **Supabase secrets** (Edge Functions → Secrets):
    - `STRIPE_SECRET_KEY` = sk_… (Developers → API keys)
-   - `STRIPE_PRICE_INDIVIDUAL` / `STRIPE_PRICE_FAMILY` / `STRIPE_PRICE_COMMERCIAL` = the price IDs
+   - `STRIPE_PRICE_INDIVIDUAL` / `STRIPE_PRICE_FAMILY` / `STRIPE_PRICE_EXTRA_VEHICLE` = the price IDs
    - `STRIPE_WEBHOOK_SECRET` = whsec_… (from step 5)
    - optional `STRIPE_TAX` = `on` only after enabling Stripe Tax (TX SaaS is taxable)
 4. **Deploy the two functions** (dashboard → Edge Functions → Deploy):

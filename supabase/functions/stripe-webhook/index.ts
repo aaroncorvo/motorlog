@@ -65,15 +65,22 @@ Deno.serve(async (req) => {
   }
   if (!sub) return new Response('ignored', { status: 200 })
 
-  const item = (sub as any).items?.data?.[0]
+  // A subscription can carry two items: the tier price + extra-vehicle slots.
+  const items = (sub as any).items?.data ?? []
+  const extraPrice = Deno.env.get('STRIPE_PRICE_EXTRA_VEHICLE')
+  let tier: string | null = null
+  let extras = 0
+  for (const it of items) {
+    if (extraPrice && it.price?.id === extraPrice) extras = it.quantity ?? 0
+    else tier = tierForPrice(it.price?.id) ?? tier
+  }
   const owner = (sub as any).metadata?.user_id ??
     (await admin.from('billing_customers').select('user_id')
       .eq('stripe_customer_id', (sub as any).customer).maybeSingle()).data?.user_id
-  const tier = tierForPrice(item?.price?.id)
   if (!owner || !tier) return new Response('unmapped — ignored', { status: 200 })
 
   // period end lives on the item in newer API versions, on the sub in older ones
-  const periodEnd = (sub as any).current_period_end ?? item?.current_period_end
+  const periodEnd = (sub as any).current_period_end ?? items[0]?.current_period_end
   const status = event.type === 'customer.subscription.deleted'
     ? 'canceled' : mapStatus((sub as any).status)
 
@@ -83,9 +90,10 @@ Deno.serve(async (req) => {
     provider_subscription_id: (sub as any).id,
     tier,
     status,
+    extra_vehicles: extras,
     current_period_end: new Date(periodEnd * 1000).toISOString(),
     cancel_at_period_end: !!(sub as any).cancel_at_period_end,
-    raw: { customer: (sub as any).customer, price: item?.price?.id, event: event.type },
+    raw: { customer: (sub as any).customer, prices: items.map((i: any) => i.price?.id), event: event.type },
     updated_at: new Date().toISOString(),
   }, { onConflict: 'provider_subscription_id' })
   if (error) return new Response(`db: ${error.message}`, { status: 500 })

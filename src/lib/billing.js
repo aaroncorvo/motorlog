@@ -1,13 +1,19 @@
 import { supabase } from './supabase.js'
 
-// Both calls return a Stripe-hosted URL and navigate to it — no card data
-// ever passes through our code. The webhook writes the subscription row;
-// effective_tier() picks it up on the next plan fetch.
+// All billing goes through the stripe-checkout edge function — no card data
+// ever passes through our code. Checkout/portal return a Stripe-hosted URL;
+// slot changes charge the card on file and return the new quantity.
 async function invoke(body) {
   const { data, error } = await supabase.functions.invoke('stripe-checkout', { body })
-  if (error || !data?.url) throw new Error(data?.error || error?.message || 'Billing service unavailable')
-  window.location.assign(data.url)
+  if (error || data?.error) throw new Error(data?.error || error?.message || 'Billing service unavailable')
+  return data
 }
 
-export const startCheckout = (tier) => invoke({ action: 'checkout', tier })
-export const openPortal = () => invoke({ action: 'portal' })
+export const startCheckout = (tier) =>
+  invoke({ action: 'checkout', tier }).then(d => { window.location.assign(d.url) })
+
+export const openPortal = () =>
+  invoke({ action: 'portal' }).then(d => { window.location.assign(d.url) })
+
+export const setExtraVehicles = (qty) =>
+  invoke({ action: 'set_extra_vehicles', qty }).then(d => d.qty)

@@ -58,6 +58,43 @@ Deno.serve(async (req) => {
       return j({ url: s.url })
     }
 
+    // Family add-on: set the extra-vehicle slot count on the existing
+    // subscription. Charges the card on file with immediate proration —
+    // no checkout page needed. The webhook's subscription.updated event
+    // writes the new quantity back to the subscriptions table.
+    if (body.action === 'set_extra_vehicles') {
+      const extraPrice = Deno.env.get('STRIPE_PRICE_EXTRA_VEHICLE')
+      if (!extraPrice) return j({ error: 'extra-vehicle price not configured' }, 500)
+      const qty = Math.max(0, Math.min(10, Math.floor(Number(body.qty ?? 0))))
+      const subs = await fetch(
+        `https://api.stripe.com/v1/subscriptions?customer=${customerId}&status=active&limit=10`,
+        { headers: { authorization: `Bearer ${Deno.env.get('STRIPE_SECRET_KEY')}` } },
+      ).then((r) => r.json())
+      const famSub = subs.data?.find((s: any) =>
+        s.items.data.some((i: any) => i.price.id === PRICES.family))
+      if (!famSub) return j({ error: 'Extra vehicles require an active Family subscription' }, 400)
+      const extraItem = famSub.items.data.find((i: any) => i.price.id === extraPrice)
+      if (extraItem && qty === 0) {
+        await fetch(`https://api.stripe.com/v1/subscription_items/${extraItem.id}`, {
+          method: 'DELETE',
+          headers: {
+            authorization: `Bearer ${Deno.env.get('STRIPE_SECRET_KEY')}`,
+            'content-type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams({ proration_behavior: 'always_invoice' }),
+        })
+      } else if (extraItem) {
+        await stripe(`/subscription_items/${extraItem.id}`,
+          { quantity: String(qty), proration_behavior: 'always_invoice' })
+      } else if (qty > 0) {
+        await stripe('/subscription_items', {
+          subscription: famSub.id, price: extraPrice,
+          quantity: String(qty), proration_behavior: 'always_invoice',
+        })
+      }
+      return j({ ok: true, qty })
+    }
+
     const price = PRICES[body.tier as string]
     if (!price) return j({ error: `unknown tier: ${body.tier}` }, 400)
     const params: Record<string, string> = {

@@ -4,7 +4,7 @@ import { computeMpg } from '../lib/calc.js'
 import { downscaleImage } from '../lib/images.js'
 import { planStatus } from '../lib/plan.js'
 import { oauthRedirect, isNative } from '../lib/native.js'
-import { startCheckout, openPortal } from '../lib/billing.js'
+import { startCheckout, openPortal, setExtraVehicles } from '../lib/billing.js'
 
 function FeedbackCard({ me, plan, showToast }) {
   const [msg, setMsg] = useState('')
@@ -660,7 +660,7 @@ export default function DataScreen({ vehicles, fuelLogs, serviceLogs, maintItems
               </div>
               {isOwner && !isNative() && (st.tier === 'free' || st.tier === 'expired') && (
                 <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
-                  {[['individual', 'INDIVIDUAL — $24/YR'], ['family', 'FAMILY — $48/YR'], ['commercial', 'COMMERCIAL — $180/YR']].map(([t, label]) => (
+                  {[['individual', 'INDIVIDUAL — $24/YR'], ['family', 'FAMILY — $48/YR']].map(([t, label]) => (
                     <button key={t} className={t === 'family' ? 'btn' : 'btn2'}
                       onClick={() => startCheckout(t).catch(e => showToast(e.message))}>
                       {label}
@@ -668,14 +668,24 @@ export default function DataScreen({ vehicles, fuelLogs, serviceLogs, maintItems
                   ))}
                   <div className="note">
                     Annual billing through Stripe's secure checkout. Beta accounts already ride the Family plan free.
+                    Bigger fleet? Email hello@motorlog.co for commercial licensing.
                   </div>
                 </div>
               )}
               {isOwner && !isNative() && st.tier !== 'free' && st.tier !== 'expired' && (
-                <div style={{ marginTop: 12 }}>
+                <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
+                  {st.tier === 'family' && (
+                    <button className="btn2" onClick={() =>
+                      setExtraVehicles((st.extraVehicles || 0) + 1)
+                        .then(q => { showToast(`Vehicle slot added — ${5 + q} total`); refresh?.() })
+                        .catch(e => showToast(e.message))}>
+                      ADD VEHICLE SLOT — $12/YR
+                      {st.extraVehicles > 0 ? ` (${st.extraVehicles} EXTRA)` : ''}
+                    </button>
+                  )}
                   <button className="btn2" onClick={() => openPortal().catch(e => showToast(e.message))}>MANAGE BILLING</button>
-                  <div className="note" style={{ marginTop: 8 }}>
-                    Card, invoices, and cancellation — handled in the Stripe portal.
+                  <div className="note">
+                    Card, invoices, slot removal, and cancellation — handled in the Stripe portal.
                   </div>
                 </div>
               )}
