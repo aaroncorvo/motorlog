@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase, configMissing } from './lib/supabase.js'
 import { dailyRecallCheck } from './lib/recalls.js'
 import { fetchPlan } from './lib/plan.js'
+import { fetchTelemetryOdos } from './lib/telem.js'
 import { isNative, oauthRedirect } from './lib/native.js'
 import Dashboard, { AddVehicleForm } from './components/Dashboard.jsx'
 import FuelScreen from './components/FuelScreen.jsx'
@@ -52,6 +53,7 @@ export default function App() {
   const [toast, setToast] = useState(null)
   const [gbOpen, setGbOpen] = useState(false)
   const [plan, setPlan] = useState(null)      // fleet owner's billing plan (0012)
+  const [telemOdos, setTelemOdos] = useState({})   // vehicle_id → telemetry-derived odometer
 
   const showToast = useCallback((msg) => {
     setToast(msg)
@@ -101,6 +103,7 @@ export default function App() {
     setDocs(dd.data || [])
     setDocsError(!!dd.error)         // table missing until migration 0009 is applied
     setLoading(false)
+    fetchTelemetryOdos(v.data || []).then(setTelemOdos)   // non-blocking
   }, [])
 
   useEffect(() => { if (session) refresh() }, [session, refresh])
@@ -191,7 +194,7 @@ export default function App() {
   if (!authReady) return <div className="spin" style={{ marginTop: '40vh' }} />
   if (!session) return <AuthGate />
 
-  const commonProps = { vehicles, fuelLogs, serviceLogs, maintItems, vid, setVid, refresh, showToast }
+  const commonProps = { vehicles, fuelLogs, serviceLogs, maintItems, vid, setVid, refresh, showToast, telemOdos }
 
   return (
     <>

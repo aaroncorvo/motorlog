@@ -464,6 +464,31 @@ export default function DataScreen({ vehicles, fuelLogs, serviceLogs, maintItems
     vehicle: vName(s.vehicle_id), date: s.serviced_at, odometer: s.odometer,
     service_type: s.service_type, parts: s.parts, cost: s.cost, shop: s.shop, notes: s.notes,
   })), 'service_logs.csv')
+  // IRS-style mileage log: one row per trip with a blank Purpose column to
+  // annotate business vs personal after export.
+  const exportMileage = async () => {
+    const { data, error } = await supabase.from('trips').select('*')
+      .order('started_at', { ascending: false }).limit(2000)
+    if (error || !data?.length) { showToast('NO TRIPS TO EXPORT YET'); return }
+    downloadCsv(data.map(t => {
+      const miles = t.distance_km ? (t.distance_km * 0.621371) : null
+      const mins = t.ended_at ? Math.round((new Date(t.ended_at) - new Date(t.started_at)) / 60000) : null
+      return {
+        date: t.started_at.slice(0, 10),
+        vehicle: vName(t.vehicle_id),
+        start_time: new Date(t.started_at).toLocaleTimeString('en-US'),
+        end_time: t.ended_at ? new Date(t.ended_at).toLocaleTimeString('en-US') : '',
+        duration_min: mins ?? '',
+        miles: miles != null ? miles.toFixed(1) : '',
+        max_mph: t.max_speed_kph ? Math.round(t.max_speed_kph * 0.621371) : '',
+        start_lat: t.start_lat ?? '', start_lon: t.start_lon ?? '',
+        end_lat: t.end_lat ?? '', end_lon: t.end_lon ?? '',
+        source: t.source_default || 'device',
+        purpose: '',
+      }
+    }), 'mileage_log.csv')
+  }
+
   const exportMaint = () => downloadCsv(maintItems.map(m => ({
     vehicle: vName(m.vehicle_id), name: m.name,
     interval_miles: m.interval_miles, interval_months: m.interval_months,
@@ -781,6 +806,7 @@ export default function DataScreen({ vehicles, fuelLogs, serviceLogs, maintItems
           <button className="btn2" onClick={exportFuel}>FUEL LOGS → CSV ({fuelLogs.length})</button>
           <button className="btn2" onClick={exportService}>SERVICE LOGS → CSV ({serviceLogs.length})</button>
           <button className="btn2" onClick={exportMaint}>MAINTENANCE → CSV ({maintItems.length})</button>
+        <button className="btn2" onClick={exportMileage}>MILEAGE LOG (TRIPS) CSV</button>
         </div>
         <div className="note" style={{ marginTop: 10 }}>
           Your data lives in your own Supabase Postgres. These exports are for backups or spreadsheet analysis.

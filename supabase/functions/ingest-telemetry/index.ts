@@ -140,6 +140,27 @@ Deno.serve(async (req) => {
     }
     if (!rows.length) return json({ error: "no valid rows (each needs a ts)" }, 400);
 
+    // Check-engine codes reported by the device or phone: raise dedupe-keyed
+    // inbox notifications (bell + digest pick them up). One alert per code per
+    // vehicle — re-reports of the same code are silent no-ops.
+    const dtcs: string[] = Array.isArray(body.dtcs)
+      ? (body.dtcs as unknown[]).filter((c): c is string => typeof c === "string" && /^[PCBU][0-3][0-9A-F]{3}$/i.test(c)).slice(0, 12)
+      : [];
+    if (dtcs.length && dev.vehicle_id) {
+      const notif = dtcs.map((code) => ({
+        user_id: dev.user_id,
+        vehicle_id: dev.vehicle_id,
+        kind: "dtc",
+        dedupe_key: `dtc:${dev.vehicle_id}:${code.toUpperCase()}`,
+        message: `⚠ CHECK ENGINE — ${code.toUpperCase()} reported by ${source === "phone" ? "phone scan" : "vehicle device"}`,
+      }));
+      await fetch(`${url}/rest/v1/notifications?on_conflict=dedupe_key`, {
+        method: "POST",
+        headers: { ...H, Prefer: "resolution=ignore-duplicates,return=minimal" },
+        body: JSON.stringify(notif),
+      }).catch(() => {});
+    }
+
     const ins = await fetch(`${url}/rest/v1/telemetry`, {
       method: "POST",
       headers: { ...H, Prefer: "return=minimal" },

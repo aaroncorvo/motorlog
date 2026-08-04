@@ -26,7 +26,8 @@
 #define MAX_CHUNK 240             // samples per spool file (~36KB batch string)
 #define RAM_BUF 900               // fallback when no SD card
 #define LOW_BATT_V 11.9f
-#define FW_VERSION "ml-0.3"
+#define FW_VERSION "ml-0.4"
+#define DTC_SCAN_MS (10 * 60 * 1000UL)
 
 FreematicsESP32 sys;
 COBD obd;
@@ -125,6 +126,8 @@ uint32_t chunkSeq = 0;            // active chunk number
 uint32_t reportIntervalMs = 30000;
 uint32_t lastPost = 0, lastConfig = 0, lastSample = 0, lastHeartbeat = 0, lastObdRetry = 0;
 uint32_t epochBase = 0, epochBaseMs = 0;
+uint32_t lastDtcScan = 0;
+char dtcJson[128] = "";              // e.g. "P0301","P0420" — sent with next batch, then cleared
 
 // ---------- time ----------
 void syncTimeFromGps(GPS_DATA* gd) {
@@ -216,10 +219,17 @@ bool oldestChunk(uint32_t& seq) {
   return true;
 }
 
+String batchHeader() {
+  String h = "{\"device_key\":\"" DEVICE_KEY "\",\"fw_version\":\"" FW_VERSION "\"";
+  if (dtcJson[0]) { h += ",\"dtcs\":["; h += dtcJson; h += "]"; }
+  h += ",\"batch\":[";
+  return h;
+}
+
 String loadChunkBatch(uint32_t seq) {
   File f = SD.open(chunkPath(seq));
   if (!f) return "";
-  String out = "{\"device_key\":\"" DEVICE_KEY "\",\"fw_version\":\"" FW_VERSION "\",\"batch\":[";
+  String out = batchHeader();
   bool first = true;
   while (f.available()) {
     String line = f.readStringUntil('\n');
@@ -336,7 +346,7 @@ void takeSample() {
 
 // ---------- upload ----------
 String ramBatch() {
-  String out = "{\"device_key\":\"" DEVICE_KEY "\",\"fw_version\":\"" FW_VERSION "\",\"batch\":[";
+  String out = batchHeader();
   for (int i = 0; i < ramCount; i++) {
     if (i) out += ',';
     out += sampleJson(ramBuf[i]);
@@ -403,10 +413,29 @@ void pullConfig() {
   }
 }
 
+// Standard OBD DTC uint16 → "P0301"-style string
+void dtcToStr(uint16_t code, char* out) {
+  const char letters[] = {'P','C','B','U'};
+  sprintf(out, "%c%01X%03X", letters[(code >> 14) & 3], (code >> 12) & 3, code & 0xFFF);
+}
+
+void scanDtcs() {
+  if (!obdReady) return;
+  uint16_t codes[6];
+  int n = obd.readDTC(codes, 6);
+  if (n <= 0) { dtcJson[0] = 0; return; }
+  char* p = dtcJson;
+  for (int i = 0; i < n && i < 6; i++) {
+    char c[8]; dtcToStr(codes[i], c);
+    p += sprintf(p, "%s\"%s\"", i ? "," : "", c);
+  }
+  Serial.printf("[DTC] %d stored: %s\n", n, dtcJson);
+}
+
 void tryObd() {
   obd.begin(sys.link);
   obdReady = obd.init(PROTO_AUTO, true);
-  if (obdReady) Serial.println("[OBD] connected");
+  if (obdReady) { Serial.println("[OBD] connected"); scanDtcs(); lastDtcScan = millis(); }
 }
 
 void setup() {
@@ -449,6 +478,10 @@ void loop() {
   if (!obdReady && now - lastObdRetry >= OBD_RETRY_MS) {
     lastObdRetry = now;
     tryObd();
+  }
+  if (obdReady && now - lastDtcScan >= DTC_SCAN_MS) {
+    lastDtcScan = now;
+    scanDtcs();
   }
   delay(20);
 }

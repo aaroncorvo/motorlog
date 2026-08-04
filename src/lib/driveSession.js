@@ -30,10 +30,10 @@ export function sampleFromReadings(pids, pos, now = Date.now()) {
   return s
 }
 
-export async function uploadBatch(vehicleId, batch) {
+export async function uploadBatch(vehicleId, batch, dtcs = null) {
   if (!batch.length) return { ok: true, accepted: 0 }
   const { data, error } = await supabase.functions.invoke('ingest-telemetry', {
-    body: { vehicle_id: vehicleId, source: 'phone', batch },
+    body: { vehicle_id: vehicleId, source: 'phone', batch, ...(dtcs?.length ? { dtcs } : {}) },
   })
   if (error) throw error
   if (data?.error) throw new Error(data.error)
@@ -79,6 +79,12 @@ export class DriveSession {
   }
 
   async start() {
+    // check-engine snapshot at trip start: stored codes ride with the first
+    // upload and raise dedupe-keyed alerts server-side
+    try {
+      const { stored } = await this.conn.readDtcs()
+      this.dtcs = stored?.length ? stored : null
+    } catch { this.dtcs = null }
     await this.#startGps()
     this.timer = setInterval(async () => {
       if (this.busy) return
@@ -102,7 +108,8 @@ export class DriveSession {
     if (!this.buffer.length) return
     const batch = this.buffer.slice(0, MAX_BATCH)
     try {
-      const res = await uploadBatch(this.vehicleId, batch)
+      const res = await uploadBatch(this.vehicleId, batch, this.dtcs)
+      this.dtcs = null                       // sent once
       this.buffer = this.buffer.slice(batch.length)
       this.uploaded += res?.accepted ?? batch.length
       this.onUpload?.(this.uploaded, this.buffer.length)

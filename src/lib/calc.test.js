@@ -224,3 +224,25 @@ describe('forecastMaintenance — mileage-to-calendar projection', () => {
     expect(fs[0].item.name).toBe('Dated')
   })
 })
+
+describe('telemetry odometer floor', () => {
+  const vehicle = { id: 'gx460', base_odometer: 90191 }
+
+  it('extraOdo raises the derived odometer when it exceeds logs', () => {
+    expect(currentOdometer(vehicle, logs, [], 92000)).toBe(92000)
+  })
+
+  it('logged readings still win over a stale telemetry value', () => {
+    expect(currentOdometer(vehicle, logs, [], 90500)).toBe(91252)
+  })
+
+  it('forecast dates tighten as telemetry miles accrue', () => {
+    const today = new Date('2026-07-20')
+    const item = { id: 'm', vehicle_id: 'gx460', name: 'Oil', interval_miles: 7500, last_done_miles: 85000 }
+    const without = forecastMaintenance([vehicle], logs, [], [item], today)
+    const withTel = forecastMaintenance([vehicle], logs, [], [item], today, { gx460: 92200 })
+    // 85000+7500=92500 due; at telemetry 92200 only 300 mi remain vs 1248 before
+    expect(withTel[0].st.remainMiles).toBe(300)
+    expect(without[0].st.remainMiles).toBe(1248)
+  })
+})

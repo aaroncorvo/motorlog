@@ -9,7 +9,7 @@ import { listReminders } from '../lib/reminders.js'
 
 const DAY = 86400000
 
-export default function Dashboard({ vehicles, fuelLogs, serviceLogs, maintItems, fixedCosts, docs, photos, recalls, plan, setVid, refresh, showToast, goTab }) {
+export default function Dashboard({ vehicles, fuelLogs, serviceLogs, maintItems, fixedCosts, docs, photos, recalls, plan, telemOdos, setVid, refresh, showToast, goTab }) {
   const [thumbs, setThumbs] = useState({})
   const [addOpen, setAddOpen] = useState(false)
   const [reminders, setReminders] = useState([])
@@ -42,7 +42,7 @@ export default function Dashboard({ vehicles, fuelLogs, serviceLogs, maintItems,
   // Every tracked interval projected to a calendar date, fleet-wide
   const events = useMemo(() => {
     const today = new Date(); today.setHours(0, 0, 0, 0)
-    const maint = forecastMaintenance(vehicles, fuelLogs, serviceLogs, maintItems, today)
+    const maint = forecastMaintenance(vehicles, fuelLogs, serviceLogs, maintItems, today, telemOdos || {})
       .map(f => ({
         date: f.dueDate, overdue: f.overdue,
         vehicle: f.vehicle, title: f.item.name, basis: f.basis, kind: 'maint',
@@ -67,7 +67,7 @@ export default function Dashboard({ vehicles, fuelLogs, serviceLogs, maintItems,
         }
       })
     return [...maint, ...docEvents, ...reminderEvents].sort((a, b) => a.date - b.date)
-  }, [vehicles, fuelLogs, serviceLogs, maintItems, docs, reminders])
+  }, [vehicles, fuelLogs, serviceLogs, maintItems, docs, reminders, telemOdos])
 
   const overdueCount = events.filter(e => e.overdue).length
   const horizon = new Date(Date.now() + 90 * DAY)

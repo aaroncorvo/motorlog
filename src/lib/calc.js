@@ -58,9 +58,12 @@ export function fuelStats(logs, vehicleId) {
   }
 }
 
-// Current odometer = highest reading we've seen anywhere
-export function currentOdometer(vehicle, fuelLogs, serviceLogs) {
-  let max = vehicle.base_odometer || 0
+// Current odometer = highest reading we've seen anywhere. extraOdo lets the
+// caller feed in a telemetry-derived reading (OBD/GPS trip distance anchored
+// to the last human-entered odometer, from telemetry_odometer() server-side) —
+// so driving the car advances maintenance countdowns between fill-ups.
+export function currentOdometer(vehicle, fuelLogs, serviceLogs, extraOdo = 0) {
+  let max = Math.max(vehicle.base_odometer || 0, extraOdo || 0)
   for (const l of fuelLogs) if (l.vehicle_id === vehicle.id && l.odometer > max) max = l.odometer
   for (const s of serviceLogs) if (s.vehicle_id === vehicle.id && (s.odometer || 0) > max) max = s.odometer
   return max
@@ -153,10 +156,10 @@ export function milesPerDay(fuelLogs, vehicleId) {
 // Project every tracked interval to a calendar date. Mile-based intervals are
 // converted through the vehicle's rolling miles/day; date-based intervals are
 // exact. Returns entries sorted soonest-first; overdue items pin to today.
-export function forecastMaintenance(vehicles, fuelLogs, serviceLogs, maintItems, today = new Date()) {
+export function forecastMaintenance(vehicles, fuelLogs, serviceLogs, maintItems, today = new Date(), extraOdos = {}) {
   const out = []
   for (const v of vehicles) {
-    const odo = currentOdometer(v, fuelLogs, serviceLogs)
+    const odo = currentOdometer(v, fuelLogs, serviceLogs, extraOdos[v.id])
     const mpd = milesPerDay(fuelLogs, v.id)
     for (const m of maintItems.filter(i => i.vehicle_id === v.id)) {
       const st = maintenanceStatus(m, odo, today)

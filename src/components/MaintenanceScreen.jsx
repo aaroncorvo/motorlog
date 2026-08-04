@@ -5,12 +5,12 @@ import { suggestParts, suggestionToParts } from '../lib/parts.js'
 
 const ORDER = { overdue: 0, 'due-soon': 1, baseline: 2, ok: 3 }
 
-export default function MaintenanceScreen({ vehicles, fuelLogs, serviceLogs, maintItems, vid, setVid, refresh, showToast }) {
+export default function MaintenanceScreen({ vehicles, fuelLogs, serviceLogs, maintItems, vid, setVid, refresh, showToast, telemOdos }) {
   const [editItem, setEditItem] = useState(null)
   const [adding, setAdding] = useState(false)
   useEffect(() => { setEditItem(null); setAdding(false) }, [vid])
   const vehicle = vehicles.find(v => v.id === vid)
-  const odo = vehicle ? currentOdometer(vehicle, fuelLogs, serviceLogs) : 0
+  const odo = vehicle ? currentOdometer(vehicle, fuelLogs, serviceLogs, telemOdos?.[vehicle.id]) : 0
 
   const items = maintItems
     .filter(m => m.vehicle_id === vid)
