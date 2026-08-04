@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MotorLog</string>
+    <string name="title_activity_main">MotorLog</string>
+    <string name="package_name">com.aaroncorvo.motorlog</string>
+    <string name="custom_url_scheme">com.aaroncorvo.motorlog</string>
+</resources>
