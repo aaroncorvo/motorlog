@@ -13,7 +13,7 @@ export const nhtsaBase = () => (isNative() ? 'https://api.nhtsa.gov' : '/nhtsa')
 // OAuth redirects must land on a real https origin (Google rejects custom
 // schemes and blocks embedded webviews), so the native flow uses the web
 // origin + a universal/app link back into the app.
-export const WEB_ORIGIN = 'https://motorlog.netlify.app'
+export const WEB_ORIGIN = 'https://app.motorlog.co'
 export const oauthRedirect = () =>
   isNative() ? `${WEB_ORIGIN}/gdrive-callback` : `${window.location.origin}/`
 

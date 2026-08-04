@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MotorLog — Know every mile</title>
+<meta name="description" content="Fuel, maintenance, true cost-per-mile, OBD-II diagnostics, and fleet telematics for people who actually maintain their vehicles.">
+<link rel="icon" href="https://app.motorlog.co/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0A0A0B; --panel:#131316; --panel2:#1B1B1F;
+  --line:rgba(255,255,255,.07); --line-hi:rgba(255,255,255,.14);
+  --amber:#FFB000; --amber-hi:#FFC94B; --green:#3DDC84; --red:#FF5A52;
+  --text:#F2F0EA; --dim:#CFCDC6; --faint:#918F87;
+  --disp:'Barlow Condensed',sans-serif; --mono:'IBM Plex Mono',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--mono);line-height:1.6;-webkit-font-smoothing:antialiased}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:radial-gradient(120% 50% at 50% -10%,rgba(255,176,0,.07),transparent 60%)}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px;position:relative;z-index:1}
+a{color:var(--amber);text-decoration:none}
+
+/* nav */
+nav{position:sticky;top:0;z-index:50;background:rgba(10,10,11,.85);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+.nav-in{display:flex;align-items:center;justify-content:space-between;height:64px}
+.logo{font-family:var(--disp);font-weight:700;font-size:24px;letter-spacing:.16em;color:var(--text)}
+.logo .tick{color:var(--amber);text-shadow:0 0 18px rgba(255,176,0,.55)}
+.nav-links{display:flex;gap:26px;align-items:center;font-size:12px;letter-spacing:.08em}
+.nav-links a{color:var(--dim)}
+.nav-links a:hover{color:var(--amber)}
+.btn{display:inline-block;background:linear-gradient(180deg,#FFC94B,#FFB000 60%,#E89400);color:#191204;
+  font-family:var(--disp);font-weight:700;letter-spacing:.12em;font-size:15px;
+  padding:12px 26px;border-radius:5px;text-transform:uppercase;
+  box-shadow:0 0 24px rgba(255,176,0,.25)}
+.btn:hover{filter:brightness(1.06)}
+.btn2{display:inline-block;border:1px solid var(--line-hi);color:var(--dim);border-radius:5px;
+  font-family:var(--disp);font-weight:600;letter-spacing:.12em;font-size:15px;
+  padding:12px 26px;text-transform:uppercase}
+.btn2:hover{color:var(--amber);border-color:rgba(255,176,0,.5)}
+
+/* hero */
+.hero{padding:96px 0 60px;text-align:center}
+.hero h1{font-family:var(--disp);font-weight:700;font-size:clamp(44px,7vw,76px);
+  line-height:1.02;letter-spacing:.04em;text-transform:uppercase}
+.hero h1 em{font-style:normal;color:var(--amber);text-shadow:0 0 30px rgba(255,176,0,.4)}
+.hero p{max-width:620px;margin:22px auto 0;color:var(--dim);font-size:15px}
+.hero .cta{margin-top:34px;display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+.beta-tag{display:inline-block;margin-bottom:18px;font-size:10.5px;letter-spacing:.22em;color:var(--amber);
+  border:1px solid rgba(255,176,0,.4);border-radius:99px;padding:6px 16px;text-transform:uppercase}
+
+/* ticker strip */
+.strip{border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  background:rgba(255,255,255,.015);padding:18px 0;margin-top:70px}
+.strip-in{display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap}
+.strip .s{text-align:center;flex:1;min-width:130px}
+.strip .v{font-family:var(--disp);font-weight:700;font-size:26px;color:var(--amber);letter-spacing:.04em}
+.strip .l{font-size:9.5px;letter-spacing:.18em;color:var(--faint);text-transform:uppercase;margin-top:2px}
+
+/* sections */
+section{padding:78px 0}
+.kicker{font-size:10.5px;letter-spacing:.24em;color:var(--amber);text-transform:uppercase;margin-bottom:10px}
+h2{font-family:var(--disp);font-weight:700;font-size:clamp(30px,4.4vw,44px);
+  letter-spacing:.05em;text-transform:uppercase;line-height:1.08}
+.lead{color:var(--dim);max-width:640px;margin-top:14px;font-size:14px}
+
+/* feature grid */
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:14px;margin-top:42px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:26px 24px;
+  transition:border-color .2s, transform .2s}
+.card:hover{border-color:rgba(255,176,0,.35);transform:translateY(-2px)}
+.card .ic{width:38px;height:38px;margin-bottom:16px;color:var(--amber)}
+.card .ic svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.card h3{font-family:var(--disp);font-weight:600;font-size:20px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px}
+.card p{color:var(--faint);font-size:12.5px}
+.card p b{color:var(--dim);font-weight:500}
+
+/* hardware section */
+.hw{display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center;margin-top:42px}
+@media(max-width:760px){.hw{grid-template-columns:1fr}}
+.hw-art{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:34px;text-align:center}
+.hw-art .big{font-family:var(--disp);font-weight:700;font-size:64px;color:var(--amber);
+  text-shadow:0 0 40px rgba(255,176,0,.35);letter-spacing:.1em}
+.hw-art .sub{font-size:10.5px;letter-spacing:.2em;color:var(--faint);text-transform:uppercase;margin-top:6px}
+.hw ul{list-style:none;margin-top:20px}
+.hw li{padding:10px 0;border-bottom:1px solid var(--line);color:var(--dim);font-size:13px}
+.hw li:last-child{border-bottom:none}
+.hw li b{color:var(--amber);font-weight:500;font-family:var(--mono)}
+
+/* pricing */
+.plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin-top:42px}
+.plan{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:28px 24px;display:flex;flex-direction:column}
+.plan.hot{border-color:rgba(255,176,0,.55);box-shadow:0 0 0 1px rgba(255,176,0,.3),0 0 40px rgba(255,176,0,.08)}
+.plan .tier{font-family:var(--disp);font-weight:700;font-size:22px;letter-spacing:.1em;text-transform:uppercase}
+.plan .price{font-family:var(--disp);font-weight:700;font-size:42px;color:var(--amber);margin:10px 0 2px}
+.plan .per{font-size:10px;letter-spacing:.15em;color:var(--faint);text-transform:uppercase}
+.plan ul{list-style:none;margin:20px 0;flex:1}
+.plan li{font-size:12px;color:var(--dim);padding:6px 0;border-bottom:1px dashed var(--line)}
+.plan li:last-child{border:none}
+.plan .btn2, .plan .btn{text-align:center}
+.beta-note{margin-top:26px;text-align:center;color:var(--amber);font-size:12px;letter-spacing:.06em}
+
+/* footer */
+footer{border-top:1px solid var(--line);padding:44px 0 60px;color:var(--faint);font-size:11px}
+.foot{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:center}
+.foot a{color:var(--faint)}
+.foot a:hover{color:var(--amber)}
+</style>
+</head>
+<body>
+
+<nav><div class="wrap nav-in">
+  <div class="logo"><span class="tick">///</span> MOTORLOG</div>
+  <div class="nav-links">
+    <a href="#features">FEATURES</a>
+    <a href="#hardware">HARDWARE</a>
+    <a href="#pricing">PRICING</a>
+    <a class="btn2" style="padding:9px 18px;font-size:13px" href="https://app.motorlog.co">SIGN IN</a>
+  </div>
+</div></nav>
+
+<header class="hero wrap">
+  <div class="beta-tag">Open Beta — All Plans Free</div>
+  <h1>Know <em>every mile.</em><br>Own every dollar.</h1>
+  <p>Fuel economy, maintenance forecasting, AI receipt scanning, live OBD-II diagnostics,
+     and fleet telematics — built for people who actually maintain their vehicles,
+     from the daily driver to the '91 project rig.</p>
+  <div class="cta">
+    <a class="btn" href="https://app.motorlog.co">START TRACKING — FREE</a>
+    <a class="btn2" href="#features">SEE WHAT IT DOES</a>
+  </div>
+</header>
+
+<div class="strip"><div class="wrap strip-in">
+  <div class="s"><div class="v">$/MILE</div><div class="l">True cost of ownership</div></div>
+  <div class="s"><div class="v">OBD-II</div><div class="l">Live engine diagnostics</div></div>
+  <div class="s"><div class="v">AI OCR</div><div class="l">Receipts → records</div></div>
+  <div class="s"><div class="v">GPS+LTE</div><div class="l">Automatic trip logging</div></div>
+</div></div>
+
+<section id="features"><div class="wrap">
+  <div class="kicker">The Instrument Cluster For Your Ownership</div>
+  <h2>Everything a meticulous owner tracks — in one place</h2>
+  <p class="lead">Fuelly-grade fuel math, dealer-grade service records, and telematics
+     that used to require a fleet contract.</p>
+  <div class="grid">
+    <div class="card">
+      <div class="ic"><svg viewBox="0 0 24 24"><path d="M4 21V6a2 2 0 0 1 2-2h5a2 2 0 0 1 2 2v15"/><path d="M3.5 21h10"/><path d="M13 10h2a2 2 0 0 1 2 2v5a1.5 1.5 0 0 0 3 0v-7l-2.5-2.5"/></svg></div>
+      <h3>Fuel & MPG Engine</h3>
+      <p>Full/partial/reset fill logic done right. Per-tank MPG, rolling averages, price
+         tracking, and a <b>red-dot early warning</b> when a tank drops below trend —
+         often the first sign of a dragging brake or clogged filter.</p>
+    </div>
+    <div class="card">
+      <div class="ic"><svg viewBox="0 0 24 24"><path d="M4.5 14a7.5 7.5 0 0 1 15 0"/><path d="M12 14l3.4-3.9"/><path d="M4.5 14H3M21 14h-1.5M6 8.5l-1-1M18 8.5l1-1M12 5.5V4"/></svg></div>
+      <h3>Maintenance Forecasting</h3>
+      <p>Intervals by miles <b>and</b> months, projected to real calendar dates from how
+         you actually drive. Parts lists per service — oil spec, quantity, OEM part
+         numbers — so the upcoming job is also the shopping list.</p>
+    </div>
+    <div class="card">
+      <div class="ic"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 11h8M8 15h5"/></svg></div>
+      <h3>AI Receipt Scanning</h3>
+      <p>Photograph any service or pump receipt. Vendor, date, odometer, line items, and
+         part numbers are extracted and filed — <b>your records build themselves</b>.
+         Works for insurance cards and registrations too.</p>
+    </div>
+    <div class="card">
+      <div class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v9"/><path d="M14.5 9.3c-.5-.8-1.4-1.2-2.5-1.2-1.5 0-2.6.8-2.6 1.9 0 2.6 5.2 1.3 5.2 3.9 0 1.1-1.1 1.9-2.6 1.9-1.1 0-2-.4-2.5-1.2"/></svg></div>
+      <h3>True Cost Per Mile</h3>
+      <p>Fuel + service + insurance + registration, normalized to <b>$/mile per
+         vehicle</b>. The keep-it-or-sell-it number, computed continuously — compare
+         every vehicle in your fleet on one screen.</p>
+    </div>
+    <div class="card">
+      <div class="ic"><svg viewBox="0 0 24 24"><path d="M14.5 6.5a4 4 0 0 0-5.3 5.3L4 17l3 3 5.2-5.2a4 4 0 0 0 5.3-5.3L14.6 12 12 9.4l2.5-2.9z"/></svg></div>
+      <h3>OBD-II Diagnostics</h3>
+      <p>Pair a Bluetooth dongle: live RPM, coolant, fuel level, and voltage. Read
+         check-engine codes with <b>AI diagnosis for your exact engine</b> — severity,
+         likely causes, drive-or-tow guidance — and clear them when fixed.</p>
+    </div>
+    <div class="card">
+      <div class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 1 8 8c0 5.4-8 12-8 12S4 15.4 4 10a8 8 0 0 1 8-8z"/></svg></div>
+      <h3>Fleet Telematics</h3>
+      <p>A plug-in device logs every trip over WiFi + LTE — routes, engine data,
+         check-engine alerts, and mileage that <b>advances your maintenance countdowns
+         automatically</b>. Export an IRS-ready mileage log any time.</p>
+    </div>
+  </div>
+</div></section>
+
+<section id="hardware" style="background:rgba(255,255,255,.015);border-top:1px solid var(--line);border-bottom:1px solid var(--line)"><div class="wrap">
+  <div class="kicker">Phone · Dongle · Vehicle Device</div>
+  <h2>Three ways in — use any or all</h2>
+  <div class="hw">
+    <div class="hw-art">
+      <div class="big">///</div>
+      <div class="sub">works with standard OBD-II BLE dongles<br>and dedicated GPS+LTE vehicle devices</div>
+    </div>
+    <ul>
+      <li><b>App only</b> — log fills and services by hand or by receipt photo. Everything works with zero hardware.</li>
+      <li><b>+ BLE dongle (~$35)</b> — live gauges, check-engine diagnosis, and drive recording with your phone's GPS.</li>
+      <li><b>+ Vehicle device</b> — always-on trip logging over WiFi and cellular, even when nobody's phone is in the car. Check-engine codes alert your inbox within minutes.</li>
+      <li><b>Family fleet</b> — invite drivers by email. Everyone sees their own car first; alerts route to the right people per vehicle.</li>
+    </ul>
+  </div>
+</div></section>
+
+<section id="pricing"><div class="wrap">
+  <div class="kicker">Simple Annual Pricing</div>
+  <h2>Pick your fleet size</h2>
+  <div class="plans">
+    <div class="plan">
+      <div class="tier">Free</div>
+      <div class="price">$0</div><div class="per">forever</div>
+      <ul><li>2 vehicles</li><li>Fuel, service & maintenance tracking</li><li>Cost-per-mile analytics</li><li>Recall monitoring</li></ul>
+      <a class="btn2" href="https://app.motorlog.co">START FREE</a>
+    </div>
+    <div class="plan">
+      <div class="tier">Individual</div>
+      <div class="price">$24</div><div class="per">per year</div>
+      <ul><li>5 vehicles</li><li>AI receipt & document scanning</li><li>Cloud backup to Google Drive</li><li>OBD-II diagnostics</li></ul>
+      <a class="btn2" href="https://app.motorlog.co">JOIN THE BETA</a>
+    </div>
+    <div class="plan hot">
+      <div class="tier">Family</div>
+      <div class="price">$48</div><div class="per">per year</div>
+      <ul><li>10 vehicles · 6 drivers</li><li>Everything in Individual</li><li>Shared fleet & per-driver alerts</li><li>Trip logging & telematics</li></ul>
+      <a class="btn" href="https://app.motorlog.co">JOIN THE BETA</a>
+    </div>
+    <div class="plan">
+      <div class="tier">Commercial</div>
+      <div class="price">$180</div><div class="per">per year</div>
+      <ul><li>15 vehicles · 15 seats</li><li>Everything in Family</li><li>Mileage-log exports</li><li>Priority support</li></ul>
+      <a class="btn2" href="https://app.motorlog.co">JOIN THE BETA</a>
+    </div>
+  </div>
+  <div class="beta-note">⚡ During the open beta, every account gets the Family plan free.
+     Paid plans activate at public launch — beta users keep their data, always.</div>
+</div></section>
+
+<footer><div class="wrap foot">
+  <div><span style="color:var(--amber)">///</span> MOTORLOG · Fuel · Service · Maintenance · TCO</div>
+  <div>
+    <a href="/privacy.html">Privacy</a> &nbsp;·&nbsp;
+    <a href="/terms.html">Terms</a> &nbsp;·&nbsp;
+    <a href="https://app.motorlog.co">Sign in</a>
+  </div>
+</div></footer>
+
+</body>
+</html>
