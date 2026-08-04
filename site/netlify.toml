@@ -1,0 +1,5 @@
+# Marketing site (motorlog.co): pure static HTML, no build step, no functions.
+# This file exists so the repo-root netlify.toml (the app's Vite build config)
+# doesn't override the dashboard settings when this site's base dir is `site`.
+[build]
+  publish = "."
