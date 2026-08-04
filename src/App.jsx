@@ -69,6 +69,17 @@ export default function App() {
       .catch(() => {})
   }, [])
 
+  // Returning from Stripe checkout: acknowledge and clean the URL. The webhook
+  // writes the subscription; the next plan fetch reflects the new tier.
+  useEffect(() => {
+    const billing = new URLSearchParams(window.location.search).get('billing')
+    if (!billing) return
+    showToast(billing === 'success'
+      ? 'Payment received — your plan activates within a minute'
+      : 'Checkout canceled — no charge was made')
+    window.history.replaceState(null, '', window.location.pathname)
+  }, [showToast])
+
   useEffect(() => {
     if (configMissing) return
     // A failed or slow session read must still reveal the login screen — an

@@ -1,4 +1,4 @@
-package com.aaroncorvo.motorlog;
+package co.motorlog.app;
 
 import com.getcapacitor.BridgeActivity;
 

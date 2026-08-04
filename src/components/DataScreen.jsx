@@ -3,7 +3,8 @@ import { supabase } from '../lib/supabase.js'
 import { computeMpg } from '../lib/calc.js'
 import { downscaleImage } from '../lib/images.js'
 import { planStatus } from '../lib/plan.js'
-import { oauthRedirect } from '../lib/native.js'
+import { oauthRedirect, isNative } from '../lib/native.js'
+import { startCheckout, openPortal } from '../lib/billing.js'
 
 function FeedbackCard({ me, plan, showToast }) {
   const [msg, setMsg] = useState('')
@@ -657,9 +658,32 @@ export default function DataScreen({ vehicles, fuelLogs, serviceLogs, maintItems
                   <div className="gl">Drive Backup</div>
                 </div>
               </div>
-              <div className="note" style={{ marginTop: 12 }}>
-                Subscriptions aren't on sale yet — billing launches with the public release.
-              </div>
+              {isOwner && !isNative() && (st.tier === 'free' || st.tier === 'expired') && (
+                <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
+                  {[['individual', 'INDIVIDUAL — $24/YR'], ['family', 'FAMILY — $48/YR'], ['commercial', 'COMMERCIAL — $180/YR']].map(([t, label]) => (
+                    <button key={t} className={t === 'family' ? 'btn' : 'btn2'}
+                      onClick={() => startCheckout(t).catch(e => showToast(e.message))}>
+                      {label}
+                    </button>
+                  ))}
+                  <div className="note">
+                    Annual billing through Stripe's secure checkout. Beta accounts already ride the Family plan free.
+                  </div>
+                </div>
+              )}
+              {isOwner && !isNative() && st.tier !== 'free' && st.tier !== 'expired' && (
+                <div style={{ marginTop: 12 }}>
+                  <button className="btn2" onClick={() => openPortal().catch(e => showToast(e.message))}>MANAGE BILLING</button>
+                  <div className="note" style={{ marginTop: 8 }}>
+                    Card, invoices, and cancellation — handled in the Stripe portal.
+                  </div>
+                </div>
+              )}
+              {isNative() && (
+                <div className="note" style={{ marginTop: 12 }}>
+                  Manage your plan at motorlog.co in your browser.
+                </div>
+              )}
             </>
           )
         })()}

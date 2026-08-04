@@ -7,7 +7,7 @@ web, PWA, iOS, and Android.
 ## Done (platform-independent)
 
 - Capacitor core + CLI, plugins: app, preferences, browser, status-bar, splash-screen
-- `capacitor.config.json` — appId `com.aaroncorvo.motorlog`, webDir `dist`,
+- `capacitor.config.json` — appId `co.motorlog.app`, webDir `dist`,
   CapacitorHttp enabled, night-cockpit splash/status colors
 - **NHTSA proxy fix** — `nhtsaBase()` returns the Netlify rewrite on web and
   `https://api.nhtsa.gov` natively (CapacitorHttp bypasses CORS)

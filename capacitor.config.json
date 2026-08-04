@@ -1,5 +1,5 @@
 {
-  "appId": "com.aaroncorvo.motorlog",
+  "appId": "co.motorlog.app",
   "appName": "MotorLog",
   "webDir": "dist",
   "plugins": {

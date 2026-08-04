@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">MotorLog</string>
     <string name="title_activity_main">MotorLog</string>
-    <string name="package_name">com.aaroncorvo.motorlog</string>
-    <string name="custom_url_scheme">com.aaroncorvo.motorlog</string>
+    <string name="package_name">co.motorlog.app</string>
+    <string name="custom_url_scheme">co.motorlog.app</string>
 </resources>
