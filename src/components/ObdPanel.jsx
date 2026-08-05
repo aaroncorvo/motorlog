@@ -23,6 +23,11 @@ export default function ObdPanel({ vehicle, refresh, showToast }) {
   const pollRef = useRef(null)
   const sessionRef = useRef(null)
 
+  const savedKey = `ml_obd_${vehicle.id}`
+  const saved = (() => {
+    try { return JSON.parse(localStorage.getItem(savedKey) || 'null') } catch { return null }
+  })()
+
   const stop = () => {
     sessionRef.current?.stop().catch(() => {})
     sessionRef.current = null
@@ -35,22 +40,30 @@ export default function ObdPanel({ vehicle, refresh, showToast }) {
   useEffect(() => stop, [])                    // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { stop() }, [vehicle.id])    // eslint-disable-line react-hooks/exhaustive-deps
 
+  const startPolling = () => {
+    let busy = false
+    pollRef.current = setInterval(async () => {
+      if (busy || !connRef.current) return
+      busy = true
+      try { setVals(await connRef.current.readPids(LIVE_PIDS)) }
+      catch { /* transient read miss; keep polling */ }
+      busy = false
+    }, 1200)
+  }
+
   const connect = async (allDevices = false) => {
     setState('connecting'); setErr(null)
     try {
       const conn = await createObdConnection()
       const name = await conn.connect(allDevices)
       connRef.current = conn
+      // remember this dongle for one-tap / automatic reconnects
+      if (conn.deviceId) {
+        localStorage.setItem(savedKey, JSON.stringify({ id: conn.deviceId, name }))
+      }
       setDeviceName(name)
       setState('live')
-      let busy = false
-      pollRef.current = setInterval(async () => {
-        if (busy || !connRef.current) return
-        busy = true
-        try { setVals(await connRef.current.readPids(LIVE_PIDS)) }
-        catch { /* transient read miss; keep polling */ }
-        busy = false
-      }, 1200)
+      startPolling()
     } catch (e) {
       if (e.name === 'NotFoundError') {
         // chooser closed empty — either cancelled or the dongle didn't advertise
@@ -61,6 +74,32 @@ export default function ObdPanel({ vehicle, refresh, showToast }) {
         setState('error')
       }
     }
+  }
+
+  // Reconnect to the remembered dongle — no scan, no picker
+  const reconnect = async () => {
+    if (!saved) return
+    setState('connecting'); setErr(null)
+    try {
+      const conn = await createObdConnection()
+      const name = await conn.reconnect(saved.id, saved.name)
+      connRef.current = conn
+      setDeviceName(name)
+      setState('live')
+      startPolling()
+    } catch {
+      setState('idle')   // out of range / ignition off — quiet, manual still works
+    }
+  }
+
+  // Auto-connect: a remembered dongle means "just link up when I open this"
+  useEffect(() => {
+    if (isNative() && saved && state === 'idle' && !connRef.current) reconnect()
+  }, [vehicle.id])       // eslint-disable-line react-hooks/exhaustive-deps
+
+  const forget = () => {
+    localStorage.removeItem(savedKey)
+    showToast('Dongle forgotten — next connect uses the picker')
   }
 
   const startRecording = async (gpsOnly = false) => {
@@ -183,9 +222,21 @@ export default function ObdPanel({ vehicle, refresh, showToast }) {
           </>
         ) : (
         <>
-          <button className="btn" onClick={() => connect(false)} disabled={state === 'connecting'}>
-            {state === 'connecting' ? 'CONNECTING…' : '⌁ CONNECT OBD-II DONGLE'}
-          </button>
+          {saved && isNative() ? (
+            <>
+              <button className="btn" onClick={reconnect} disabled={state === 'connecting'}>
+                {state === 'connecting' ? 'CONNECTING…' : `⌁ CONNECT — ${(saved.name || 'SAVED DONGLE').toUpperCase()}`}
+              </button>
+              <div style={{ height: 8 }} />
+              <button className="btn2" onClick={() => connect(false)} disabled={state === 'connecting'}>
+                USE A DIFFERENT DONGLE
+              </button>
+            </>
+          ) : (
+            <button className="btn" onClick={() => connect(false)} disabled={state === 'connecting'}>
+              {state === 'connecting' ? 'CONNECTING…' : '⌁ CONNECT OBD-II DONGLE'}
+            </button>
+          )}
           <div style={{ height: 8 }} />
           <button className="btn2" onClick={() => startRecording(true)}
             style={{ color: 'var(--amber)', borderColor: 'rgba(255,176,0,0.4)' }}>
@@ -205,6 +256,13 @@ export default function ObdPanel({ vehicle, refresh, showToast }) {
             code diagnosis, and code clearing. Bluetooth-Classic dongles (most cheap
             "Android-only" ELM327s) won't appear — BLE models are usually marked
             "for iPhone/iOS".
+            {saved && isNative() && (
+              <> Auto-connects to {saved.name || 'your dongle'} when in range.{' '}
+                <span onClick={forget} style={{ color: 'var(--amber)', cursor: 'pointer', textDecoration: 'underline' }}>
+                  Forget it
+                </span>
+              </>
+            )}
           </div>
           {err && <div className="err" style={{ marginTop: 8 }}>{err}</div>}
         </>

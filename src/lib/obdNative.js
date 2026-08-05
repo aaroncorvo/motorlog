@@ -45,11 +45,26 @@ export class NativeObdConnection {
     const device = await ble.requestDevice(
       allDevices ? { optionalServices: services }
                  : { services, optionalServices: services })
-    await ble.connect(device.deviceId, () => { this.deviceId = null })
-    this.deviceId = device.deviceId
+    return this.#setup(device.deviceId, device.name)
+  }
+
+  // Direct connect to a remembered dongle — no scan, no picker. iOS keeps
+  // known peripherals addressable by identifier, so this works instantly
+  // when the dongle is in range and throws quickly when it isn't.
+  async reconnect(deviceId, name) {
+    const ble = await this.#client()
+    const known = await ble.getDevices([deviceId])
+    if (!known?.length) throw new Error('Saved dongle not known to this phone')
+    return this.#setup(deviceId, name)
+  }
+
+  async #setup(deviceId, name) {
+    const ble = this.ble
+    await ble.connect(deviceId, () => { this.deviceId = null })
+    this.deviceId = deviceId
 
     // find a service exposing a write + notify pair (dongles differ)
-    const discovered = await ble.getServices(device.deviceId)
+    const discovered = await ble.getServices(deviceId)
     for (const svc of discovered) {
       const w = svc.characteristics.find(c => c.properties.write || c.properties.writeWithoutResponse)
       const n = svc.characteristics.find(c => c.properties.notify)
@@ -75,7 +90,7 @@ export class NativeObdConnection {
     })
 
     for (const cmd of INIT_COMMANDS) await this.send(cmd)
-    return device.name || 'OBD-II'
+    return name || 'OBD-II'
   }
 
   send(cmd, timeoutMs = 4000) {
