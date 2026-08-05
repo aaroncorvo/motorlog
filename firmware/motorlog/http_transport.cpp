@@ -8,6 +8,10 @@
 // privacy against an active MITM on the local network.
 static int run(const char* url, const char* anonKey, const char* deviceKey,
                const String* postBody, String* out) {
+  // With BLE resident, TLS buffers may not fit — running out mid-alloc
+  // aborts the whole chip (uncaught bad_alloc). Bail early; the cellular
+  // fallback in postBody() carries the traffic instead.
+  if (ESP.getMaxAllocHeap() < 50000) return -1;
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;

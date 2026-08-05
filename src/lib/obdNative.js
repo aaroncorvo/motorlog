@@ -36,10 +36,15 @@ export class NativeObdConnection {
     return this.ble
   }
 
-  async connect() {
+  async connect(allDevices = false) {
     const ble = await this.#client()
     const services = OBD_SERVICES.map(full)
-    const device = await ble.requestDevice({ optionalServices: services })
+    // filter the scan to devices advertising an OBD service — otherwise the
+    // native picker lists every BLE gadget in the house (and glitches on the
+    // volume); allDevices is the escape hatch for oddball dongles
+    const device = await ble.requestDevice(
+      allDevices ? { optionalServices: services }
+                 : { services, optionalServices: services })
     await ble.connect(device.deviceId, () => { this.deviceId = null })
     this.deviceId = device.deviceId
 

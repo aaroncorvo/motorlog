@@ -1,31 +1,91 @@
-// ELM327-over-BLE bridge on the FreematicsPlus SPP GATT server (the same
-// proven ble_init path telelogger ships with): service 0xABF0, command char
-// 0xFFE1 (write) + status char 0xFFE2 (notify) — a write/notify pair the
-// MotorLog app's service discovery accepts. Responses come from the main
-// loop's sample cache; BLE never touches the OBD link from its own task.
+// ELM327-over-BLE bridge — advertises like a generic BLE OBD dongle
+// (service FFF0, notify FFF1 / write FFF2) so the MotorLog app's CONNECT
+// path works against it. Uses the Arduino BLE wrapper (Bluedroid): the
+// library's own SPP server crashes this core's BT stack on the connect
+// event (null memcpy in btc_gatts_cb_handler). Init runs FIRST in setup —
+// btStart needs a big contiguous heap block, before WiFi/cell fragment it.
+// Responses come from the main loop's sample cache; BLE callbacks only
+// queue bytes — they never touch the OBD link.
 #include "ble_bridge.h"
-#include <FreematicsPlus.h>          // wraps ble_spp_server.h in extern "C"
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 #include <esp_bt.h>
 
 BleLive bleLive;
-static bool bleUp = false;
+
+static BLECharacteristic* notifyChar = nullptr;
+static BLEAdvertising* adv = nullptr;
+// Lock-free single-producer (BT task) / single-consumer (loop) byte ring.
+// No heap, no critical sections — heap ops with interrupts masked can
+// deadlock across cores and freeze the radio mid-connection.
+static char rxRing[512];
+static volatile uint16_t rxHead = 0, rxTail = 0;
+static volatile bool connected = false;
+
+class SrvCb : public BLEServerCallbacks {
+  void onConnect(BLEServer*) override { connected = true; Serial.println("[BLE] phone connected"); }
+  void onDisconnect(BLEServer*) override {
+    connected = false;
+    Serial.println("[BLE] phone disconnected");
+    if (adv) adv->start();
+  }
+};
+
+class RxCb : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* c) override {
+    std::string v = c->getValue();
+    for (char ch : v) {
+      uint16_t next = (rxHead + 1) % sizeof(rxRing);
+      if (next == rxTail) break;             // ring full: drop, never block
+      rxRing[rxHead] = ch;
+      rxHead = next;
+    }
+  }
+};
+
+// Dedicated task: the main loop can vanish into multi-second cellular/WiFi
+// work, but the phone's ELM protocol expects answers within ~1s. Everything
+// this task touches is cache or lock-free — never the OBD link.
+static void bleTask(void*) {
+  for (;;) {
+    bleBridgeProcess();
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}
 
 void bleBridgeInit(const char* name) {
   // BLE-only: hand Classic-BT's controller arena (~45KB) back to the heap
   // BEFORE the controller starts — WiFi can't init without it
   esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
-  ble_init(name);                    // ≤13 chars fits the raw adv payload
-  bleUp = true;
-  Serial.printf("[BLE] SPP server \"%s\" (svc ABF0), free heap %u\n",
+  BLEDevice::init(name);
+  BLEServer* server = BLEDevice::createServer();
+  server->setCallbacks(new SrvCb());
+  BLEService* svc = server->createService(BLEUUID((uint16_t)0xFFF0));
+  notifyChar = svc->createCharacteristic(BLEUUID((uint16_t)0xFFF1),
+    BLECharacteristic::PROPERTY_NOTIFY);
+  notifyChar->addDescriptor(new BLE2902());
+  BLECharacteristic* wr = svc->createCharacteristic(BLEUUID((uint16_t)0xFFF2),
+    BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
+  wr->setCallbacks(new RxCb());
+  svc->start();
+  adv = BLEDevice::getAdvertising();
+  adv->addServiceUUID(BLEUUID((uint16_t)0xFFF0));
+  adv->setScanResponse(true);
+  adv->start();
+  xTaskCreatePinnedToCore(bleTask, "ble_elm", 6144, nullptr, 2, nullptr, 1);
+  Serial.printf("[BLE] advertising \"%s\" (svc FFF0), free heap %u\n",
     name, (unsigned)ESP.getFreeHeap());
 }
 
-// notify in ≤20-byte chunks (status attr length / default-MTU safe);
-// the app accumulates until it sees '>'
-static void sendChunked(const String& s) {
+// notify in ≤20-byte chunks (default-MTU safe); the app accumulates until '>'
+static void sendResp(const String& s) {
+  if (!notifyChar || !connected) return;
   for (int i = 0; i < (int)s.length(); i += 20) {
     int n = min(20, (int)s.length() - i);
-    ble_send(SPP_IDX_SPP_STATUS_VAL, (void*)(s.c_str() + i), n);
+    notifyChar->setValue((uint8_t*)(s.c_str() + i), n);
+    notifyChar->notify();
     delay(8);
   }
 }
@@ -70,11 +130,21 @@ static String handleCommand(String cmd) {
 }
 
 void bleBridgeProcess() {
-  if (!bleUp) return;
-  char* cmd = ble_recv_command(0);   // 0 ticks — pure poll, never blocks the loop
-  if (!cmd) return;
-  String c(cmd);
-  free(cmd);
-  String resp = handleCommand(c);
-  sendChunked(resp + "\r\r>");
+  static char cmdBuf[64];
+  static uint8_t cmdLen = 0;
+  while (rxTail != rxHead) {
+    char ch = rxRing[rxTail];
+    rxTail = (rxTail + 1) % sizeof(rxRing);
+    if (ch == '\r' || ch == '\n') {
+      if (cmdLen) {
+        cmdBuf[cmdLen] = 0;
+        cmdLen = 0;
+        Serial.printf("[BLE] cmd: %s\n", cmdBuf);
+        String resp = handleCommand(String(cmdBuf));
+        if (resp.length()) sendResp(resp + "\r\r>");
+      }
+    } else if (cmdLen < sizeof(cmdBuf) - 1) {
+      cmdBuf[cmdLen++] = ch;
+    }
+  }
 }

@@ -25,7 +25,9 @@
 #define OBD_RETRY_MS 20000
 #define CELL_RETRY_MS (5 * 60 * 1000UL)
 #define MAX_CHUNK 240             // samples per spool file (~36KB batch string)
-#define RAM_BUF 900               // fallback when no SD card
+#define RAM_BUF 120               // fallback when no SD card (kept small:
+                                  // 900 cost 50KB of RAM the radios need —
+                                  // with the SD installed this is dead space)
 #define LOW_BATT_V 11.9f
 #define FW_VERSION "ml-0.6"
 #define DTC_SCAN_MS (10 * 60 * 1000UL)
@@ -438,16 +440,22 @@ void dtcToStr(uint16_t code, char* out) {
   sprintf(out, "%c%01X%03X", letters[(code >> 14) & 3], (code >> 12) & 3, code & 0xFFF);
 }
 
+uint16_t dtcCache[6];                // raw codes for the BLE bridge (no live
+int dtcCacheN = 0;                   // OBD access from the BLE task, ever)
+volatile bool bleClearReq = false;
+
 void scanDtcs() {
   if (!obdReady) return;
   uint16_t codes[6];
   int n = obd.readDTC(codes, 6);
-  if (n <= 0) { dtcJson[0] = 0; return; }
+  if (n <= 0) { dtcJson[0] = 0; dtcCacheN = 0; return; }
   char* p = dtcJson;
   for (int i = 0; i < n && i < 6; i++) {
     char c[8]; dtcToStr(codes[i], c);
     p += sprintf(p, "%s\"%s\"", i ? "," : "", c);
+    dtcCache[i] = codes[i];
   }
+  dtcCacheN = n < 6 ? n : 6;
   Serial.printf("[DTC] %d stored: %s\n", n, dtcJson);
 }
 
@@ -510,15 +518,17 @@ void tryObd() {
   }
 }
 
-// BLE bridge hooks — run from loop() context, so sharing the OBD link is safe
+// BLE bridge hooks — called from the BLE task, so they must NOT touch the
+// OBD link (loop() owns it). Codes come from the periodic scan cache; a
+// clear is flagged and executed by loop() on its next pass.
 int bleReadDtcsHook(uint16_t* codes, int maxN) {
-  if (!obdReady) return 0;
-  int n = obd.readDTC(codes, maxN);
-  return n < 0 ? 0 : n;
+  int n = dtcCacheN < maxN ? dtcCacheN : maxN;
+  for (int i = 0; i < n; i++) codes[i] = dtcCache[i];
+  return n;
 }
 bool bleClearDtcsHook() {
   if (!obdReady) return false;
-  obd.clearDTC();
+  bleClearReq = true;                // loop() performs the actual clear
   return true;
 }
 
@@ -575,6 +585,11 @@ void loop() {
     lastOdoRead = now;
     readOdometer();
   }
-  bleBridgeProcess();
+  if (bleClearReq && obdReady) {
+    bleClearReq = false;
+    obd.clearDTC();
+    dtcCacheN = 0; dtcJson[0] = 0;
+    Serial.println("[DTC] cleared (BLE request)");
+  }
   delay(20);
 }
