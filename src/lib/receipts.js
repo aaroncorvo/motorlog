@@ -1,5 +1,6 @@
 import { supabase } from './supabase.js'
 import { downscaleImage, blobToBase64 } from './images.js'
+import { localToday } from './calc.js'
 
 // Downscale images before OCR/upload: receipts photographed at 12MP waste
 // tokens and storage. ~1600px long edge is plenty for receipt text.
