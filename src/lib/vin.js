@@ -1,4 +1,5 @@
 // NHTSA vPIC VIN decoding (CORS-open, no key required).
+import { localToday } from './calc.js'
 
 const KEEP = [
   ['Series', 'Series'],

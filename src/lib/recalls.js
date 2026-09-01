@@ -11,6 +11,7 @@ function recallBlurb(r) {
 // (/nhtsa/* -> api.nhtsa.gov/*); native builds call it directly through
 // CapacitorHttp, which isn't subject to CORS (see lib/native.js).
 import { nhtsaBase, nativeGetJson, isNative as isNativePlatformSafe } from './native.js'
+import { localToday } from './calc.js'
 // Model naming differs from ours ("GX 460" vs "GX460"), so try variants until one hits.
 export function modelVariants(model) {
   const m = model.trim()
