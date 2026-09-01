@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { supabase } from '../lib/supabase.js'
-import { computeMpg, fuelStats, maintenanceStatus, fmt } from '../lib/calc.js'
+import { computeMpg, fuelStats, maintenanceStatus, fmt , localToday } from '../lib/calc.js'
 import { prepareReceiptFile, uploadReceipt, ocrReceipt, receiptUrl, extractionToFuel, insertFuelReceipt } from '../lib/receipts.js'
 import MpgChart from './MpgChart.jsx'
 
@@ -131,7 +131,9 @@ export default function FuelScreen({ vehicles, fuelLogs, maintItems, vid, setVid
 }
 
 function FuelForm({ vehicle, lastOdo, maintItems, initial, receipt, showToast, onDone }) {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localToday()
+  const draftKey = `ml_fuel_draft_${vehicle.id}`
+  const restoredRef = useRef(false)
   const [f, setF] = useState(() => {
     const base = {
       filled_at: today, odometer: '', fill_type: 'full',
@@ -145,8 +147,27 @@ function FuelForm({ vehicle, lastOdo, maintItems, initial, receipt, showToast, o
         if (k in base && v !== '' && v != null && !base[k]) base[k] = v
       }
     }
+    // Restore an interrupted entry: iOS reloads the webview when the screen
+    // locks or the app is backgrounded, wiping React state mid-fill-up.
+    try {
+      const d = JSON.parse(localStorage.getItem(draftKey) || 'null')
+      if (d && Date.now() - d.ts < 12 * 3600 * 1000) {
+        restoredRef.current = true
+        return { ...base, ...d.f }
+      }
+    } catch { /* corrupt draft — start fresh */ }
     return base
   })
+
+  // keep the draft current while the user types (only once real data exists)
+  useEffect(() => {
+    const dirty = f.odometer || f.gallons || f.cost_per_gallon || f.total_cost || f.brand || f.notes
+    if (!dirty) return
+    const t = setTimeout(() => {
+      try { localStorage.setItem(draftKey, JSON.stringify({ f, ts: Date.now() })) } catch { /* storage full */ }
+    }, 400)
+    return () => clearTimeout(t)
+  }, [f, draftKey])
   const [psi, setPsi] = useState({ fl: '', fr: '', rl: '', rr: '' })
   const [showPsi, setShowPsi] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -186,6 +207,7 @@ function FuelForm({ vehicle, lastOdo, maintItems, initial, receipt, showToast, o
       notes: f.notes || null,
     }).select('id').single()
     if (error) { setBusy(false); alert(error.message); return }
+    try { localStorage.removeItem(draftKey) } catch { /* nothing to clear */ }
 
     // attach the scanned receipt to the fill it produced
     if (receipt) {
@@ -212,6 +234,11 @@ function FuelForm({ vehicle, lastOdo, maintItems, initial, receipt, showToast, o
 
   return (
     <div className="card" style={{ marginBottom: 16 }}>
+      {restoredRef.current && (
+        <div className="note" style={{ marginBottom: 10, color: 'var(--green)' }}>
+          ◉ Picked up where you left off — your unsaved entry was restored.
+        </div>
+      )}
       {receipt && (
         <div className="note" style={{ marginBottom: 10, color: 'var(--amber)' }}>
           ⌁ Receipt attached — fields below were read from it. Enter gallons (or $/gal) and review before saving.

@@ -71,7 +71,7 @@ export async function syncRecalls(vehicle, existing) {
 
 // Daily sweep across the fleet (gated by localStorage so it runs once per day).
 export async function dailyRecallCheck(vehicles, existingRecalls) {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localToday()
   if (localStorage.getItem('recall_checked') === today) return null
   let added = 0
   for (const v of vehicles) {

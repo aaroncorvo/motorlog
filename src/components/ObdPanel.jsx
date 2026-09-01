@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase.js'
 import { bleSupported, createObdConnection, PIDS } from '../lib/obd.js'
+import { localToday } from '../lib/calc.js'
 import { DriveSession } from '../lib/driveSession.js'
 import { isNative } from '../lib/native.js'
 import { describeDtc, explainDtcs } from '../lib/dtc.js'
@@ -165,7 +166,7 @@ export default function ObdPanel({ vehicle, refresh, showToast }) {
     if (diag?.summary) lines.push('Diagnosis: ' + diag.summary)
     const { error } = await supabase.from('service_logs').insert({
       user_id: vehicle.user_id, vehicle_id: vehicle.id,
-      serviced_at: new Date().toISOString().slice(0, 10),
+      serviced_at: localToday(),
       service_type: 'Diagnostics', cost: 0,
       notes: 'OBD-II scan: ' + (lines.length ? lines.join(' · ') : 'no stored codes'),
     })

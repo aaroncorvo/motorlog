@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase.js'
-import { fmt } from '../lib/calc.js'
+import { fmt , localToday } from '../lib/calc.js'
 import { prepareReceiptFile, uploadReceipt, ocrReceipt, receiptUrl, extractionToService } from '../lib/receipts.js'
 
 const COMMON_SERVICES = [
@@ -131,14 +131,32 @@ export default function ServiceScreen({ vehicles, serviceLogs, maintItems, recei
 }
 
 function ServiceForm({ vehicle, maintItems, initial, receipt, onDone }) {
-  const today = new Date().toISOString().slice(0, 10)
-  const [f, setF] = useState({
-    serviced_at: today, odometer: '', service_type: 'Oil Change', parts: '', cost: '', shop: 'DIY', notes: '',
-    ...(initial || {}),
+  const today = localToday()
+  const draftKey = `ml_svc_draft_${vehicle.id}`
+  const [f, setF] = useState(() => {
+    const base = {
+      serviced_at: today, odometer: '', service_type: 'Oil Change', parts: '', cost: '', shop: 'DIY', notes: '',
+      ...(initial || {}),
+    }
+    // restore an interrupted entry — iOS reloads the webview on screen lock
+    try {
+      const d = JSON.parse(localStorage.getItem(draftKey) || 'null')
+      if (d && Date.now() - d.ts < 12 * 3600 * 1000) return { ...base, ...d.f }
+    } catch { /* corrupt draft — start fresh */ }
+    return base
   })
   const [updateMaint, setUpdateMaint] = useState(true)
   const [busy, setBusy] = useState(false)
   const set = (k, v) => setF(p => ({ ...p, [k]: v }))
+
+  useEffect(() => {
+    const dirty = f.odometer || f.parts || f.cost || f.notes
+    if (!dirty) return
+    const t = setTimeout(() => {
+      try { localStorage.setItem(draftKey, JSON.stringify({ f, ts: Date.now() })) } catch { /* storage full */ }
+    }, 400)
+    return () => clearTimeout(t)
+  }, [f, draftKey])
 
   // find a maintenance item whose name loosely matches the service type
   const matchMaint = () => {
@@ -174,6 +192,7 @@ function ServiceForm({ vehicle, maintItems, initial, receipt, onDone }) {
       notes: f.notes || null,
     }).select('id').single()
     if (error) { setBusy(false); alert(error.message); return }
+    try { localStorage.removeItem(draftKey) } catch { /* nothing to clear */ }
 
     // attach the scanned receipt to the service log it produced
     if (receipt) {

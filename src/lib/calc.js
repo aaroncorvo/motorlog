@@ -193,3 +193,10 @@ export const fmt = {
   cpm: v => v == null ? '—' : '$' + Number(v).toFixed(3),
   date: v => v == null ? '—' : v,
 }
+
+// Today's date in the device's own timezone. new Date().toISOString() is UTC,
+// which rolls to tomorrow around 7 PM Central — evening fill-ups were being
+// pre-dated to the next day.
+export function localToday(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}

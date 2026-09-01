@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase.js'
-import { currentOdometer, maintenanceStatus, fmt } from '../lib/calc.js'
+import { currentOdometer, maintenanceStatus, fmt , localToday } from '../lib/calc.js'
 import { suggestParts, suggestionToParts } from '../lib/parts.js'
 
 const ORDER = { overdue: 0, 'due-soon': 1, baseline: 2, ok: 3 }
@@ -220,7 +220,7 @@ function MaintForm({ item, vehicle, vehicleId, ownerId, currentOdo, onDone }) {
 
   const markDoneNow = () => {
     set('last_done_miles', String(currentOdo))
-    set('last_done_date', new Date().toISOString().slice(0, 10))
+    set('last_done_date', localToday())
   }
 
   const del = async () => {

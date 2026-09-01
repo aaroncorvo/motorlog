@@ -52,7 +52,7 @@ export function extractionToService(x) {
     })
     .join('; ')
   return {
-    serviced_at: x.receipt_date || new Date().toISOString().slice(0, 10),
+    serviced_at: x.receipt_date || localToday(),
     odometer: x.odometer != null ? String(x.odometer) : '',
     service_type: x.service_type || 'Other',
     parts,
@@ -68,7 +68,7 @@ export function extractionToService(x) {
 // guess gallons: the form's own auto-derive (total + $/gal → gallons) handles it.
 export function extractionToFuel(x) {
   return {
-    filled_at: x.receipt_date || new Date().toISOString().slice(0, 10),
+    filled_at: x.receipt_date || localToday(),
     odometer: x.odometer != null ? String(x.odometer) : '',
     total_cost: x.total != null ? String(x.total) : '',
     brand: x.vendor || '',

@@ -32,7 +32,7 @@ export async function decodeVin(vin) {
     make: title(d.Make),
     model: d.Model || '',
     specs,
-    decoded_at: new Date().toISOString().slice(0, 10),
+    decoded_at: localToday(),
   }
 }
 
